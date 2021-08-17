@@ -1,0 +1,2617 @@
+-- SQLINES DEMO *** script in SSMS, be sure to enable "Query -> SQLCMD Mode"
+
+:setvar checkpoint_files_location `d:Data`
+
+:setvar max_memory_percent `80`
+:setvar database_name `AdventureWorks2014`
+
+-- SQLINES DEMO *** is used to install the sample for In-Memory OLTP in SQL Server 2014, based on AdventureWorks.
+-- SQLINES DEMO *** es the base AdventureWorks2014 database, available from: http://msftdbprodsamples.codeplex.com/downloads/get/880661
+-- 
+-- SQLINES DEMO ***  the sample, as well as installation instructions, see Books Online
+-- 
+-- SQLINES DEMO *** 4-08-22
+-- 
+-- SQLINES DEMO *** 4-08-22): updated to use AdventureWorks2014
+-- SQLINES DEMO *** 4-04-28): fixed isolation level for sample stored procedures demonstrating integrity checks:
+-- SQLINES DEMO *** rtSpecialOfferProduct_inmem, Sales.usp_DeleteSpecialOffer_inmem,
+-- SQLINES DEMO *** _InsertProduct_inmem, Production.usp_DeleteProduct_inmem
+-- 
+-- SQLINES DEMO *** crosoft Corporation.  All rights reserved.
+-- 
+-- SQLINES DEMO *** is intended only as a supplement to Microsoft
+-- SQLINES DEMO ***  and/or on-line documentation.  
+-- 
+-- SQLINES DEMO *** ORMATION ARE PROVIDED "AS IS" WITHOUT WARRANTY OF 
+-- SQLINES DEMO *** EXPRESSED OR IMPLIED, INCLUDING BUT NOT LIMITED TO 
+-- SQLINES DEMO *** NTIES OF MERCHANTABILITY AND/OR FITNESS FOR A
+-- PARTICULAR PURPOSE.
+
+
+USE master;
+ 
+
+/* SET ANSI_NULLS ON */
+ 
+/* SET QUOTED_IDENTIFIER ON */
+ 
+/* SET ANSI_PADDING ON */
+ 
+ 
+
+/* SQLINES DEMO *** ******** Add MEMORY_OPTIMIZED_DATA filegroup and container to enable in-memory OLTP in the database **********************************/
+
+IF NOT EXISTS (SELECT * FROM $ THEN(
+END IF;database_name).sys.data_spaces WHERE type='FX')
+	ALTER DATABASE $(database_name) 
+	  ADD FILEGROUP `$(database_name)_mod` CONTAINS MEMORY_OPTIMIZED_DATA
+GO
+IF NOT EXISTS (SELECT * FROM $ THEN(
+END IF;database_name).sys.data_spaces ds JOIN $(database_name).sys.database_files df ON ds.data_space_id=df.data_space_id WHERE ds.type='FX')
+	ALTER DATABASE $(database_name)
+	  ADD FILE (name='$(database_name)_mod', filename='$(checkpoint_files_location)$(database_name)_mod') 
+	  TO FILEGROUP `$(database_name)_mod`
+GO
+
+/* SQLINES DEMO *** ******** Create resource pool and bind the database to it **********************************/
+
+IF EXISTS (SELECT * FROM sys.resource_governor_resource_pools rp join sys.databases d on rp.pool_id=d.resource_pool_id WHERE d.name=N'$(database_name)')
+THEN
+	EXECUTE sp_xtp_unbind_db_resource_pool '$(database_name)'
+END IF;
+ 
+
+IF NOT EXISTS (SELECT * FROM sys.resource_governor_resource_pools WHERE name=N'Pool_$(database_name)')
+THEN		
+	CREATE RESOURCE POOL Pool_$(database_name) 
+		WITH ( MAX_MEMORY_PERCENT = $(max_memory_percent) );
+	ALTER RESOURCE GOVERNOR RECONFIGURE;
+END IF;
+ 
+
+EXECUTE sp_xtp_bind_db_resource_pool '$(database_name)', 'Pool_$(database_name)'
+GO
+
+ALTER DATABASE $(database_name) SET OFFLINE WITH ROLLBACK IMMEDIATE
+GO
+ALTER DATABASE $(database_name) SET ONLINE
+GO
+
+
+USE $(database_name)
+GO
+
+/* SQLINES DEMO *** ******** For memory-optimized tables, automatically map all lower isolation levels (including READ COMMITTED) to SNAPSHOT **********************************/
+
+ALTER DATABASE CURRENT SET MEMORY_OPTIMIZED_ELEVATE_TO_SNAPSHOT = ON
+GO
+
+
+
+/* SQLINES DEMO *** ******** Create Tables **********************************/
+
+-- SQLINES DEMO *** jects that have a schema-bound dependency on the table
+IF object_id('[Sales].[vSalesOrderHeader_extended_inmem]') IS NOT NULL THEN
+	DROP VIEW
+END IF; `Sales`.`vSalesOrderHeader_extended_inmem` 
+GO
+IF object_id('[Sales].[vSalesOrderDetail_extended_inmem]') IS NOT NULL THEN
+	DROP VIEW
+END IF; `Sales`.`vSalesOrderDetail_extended_inmem` 
+GO
+IF object_id('[Sales].[usp_UpdateSalesOrderShipInfo_native]') IS NOT NULL THEN
+	DROP PROCEDURE `Sales`.usp_UpdateSalesOrderShipInfo_native;
+END IF; 
+ 
+IF object_id('[Sales].[usp_InsertSalesOrder_inmem]') IS NOT NULL THEN
+	DROP PROCEDURE `Sales`.usp_InsertSalesOrder_inmem;
+END IF; 
+ 
+IF object_id('[Sales].[SalesOrderHeader_inmem]') IS NOT NULL THEN
+	DROP TABLE `Sales`.SalesOrderHeader_inmem;
+END IF; 
+ 
+-- SQLINES LICENSE FOR EVALUATION USE ONLY
+CREATE TABLE `Sales`.SalesOrderHeader_inmem(
+	`SalesOrderID` int AUTO_INCREMENT NOT NULL PRIMARY KEY NONCLUSTERED HASH (BUCKET_COUNT=10000000);,
+	`RevisionNumber` `tinyint` NOT NULL CONSTRAINT `IMDF_SalesOrderHeader_RevisionNumber`  DEFAULT ((0)),
+	`OrderDate` `datetime2` NOT NULL ,
+	`DueDate` `datetime2` NOT NULL,
+	`ShipDate` `datetime2` NULL,
+	`Status` `tinyint` NOT NULL CONSTRAINT `IMDF_SalesOrderHeader_Status`  DEFAULT ((1)),
+	`OnlineOrderFlag` bit NOT NULL CONSTRAINT `IMDF_SalesOrderHeader_OnlineOrderFlag`  DEFAULT ((1)), 
+	`PurchaseOrderNumber` nvarchar(25) NULL,
+	`AccountNumber` nvarchar(15) NULL,
+	`CustomerID` `int` NOT NULL ,
+	`SalesPersonID` `int` NOT NULL CONSTRAINT `IMDF_SalesOrderHeader_SalesPersonID`  DEFAULT ((-1)), 
+	`TerritoryID` `int` NULL,
+	`BillToAddressID` `int` NOT NULL,
+	`ShipToAddressID` `int` NOT NULL,
+	`ShipMethodID` `int` NOT NULL,
+	`CreditCardID` `int` NULL,
+	`CreditCardApprovalCode` [varchar](15) NULL,
+	`CurrencyRateID` `int` NULL,
+	`SubTotal` `money` NOT NULL CONSTRAINT `IMDF_SalesOrderHeader_SubTotal`  DEFAULT ((0.00)),
+	`TaxAmt` `money` NOT NULL CONSTRAINT `IMDF_SalesOrderHeader_TaxAmt`  DEFAULT ((0.00)),
+	`Freight` `money` NOT NULL CONSTRAINT `IMDF_SalesOrderHeader_Freight`  DEFAULT ((0.00)),
+	`Comment` [nvarchar](128) NULL,
+	`ModifiedDate` `datetime2` NOT NULL ,
+
+	INDEX IX_SalesPersonID MD5 (SalesPersonID) WITH (BUCKET_COUNT=1000000),
+	INDEX IX_CustomerID MD5 (CustomerID) WITH (BUCKET_COUNT=1000000)
+) WITH (MEMORY_OPTIMIZED=ON)
+GO
+
+-- SQLINES DEMO *** or TotalDue and SalesOrderNumber are included in this view
+IF object_id('[Sales].[vSalesOrderHeader_extended_inmem]') IS NOT NULL THEN
+	DROP VIEW
+END IF; `Sales`.`vSalesOrderHeader_extended_inmem` 
+GO
+CREATE VIEW Sales.[vSalesOrderHeader_extended_inmem]
+WITH SCHEMABINDING
+AS
+SELECT SalesOrderID, 
+	RevisionNumber, 
+	OrderDate, 
+	DueDate, 
+	ShipDate, 
+	Status, 
+	OnlineOrderFlag, 
+	PurchaseOrderNumber, 
+	AccountNumber, 
+	CustomerID, 
+	SalesPersonID, 
+	TerritoryID, 
+	BillToAddressID, 
+	ShipToAddressID,                          
+	ShipMethodID, 
+	CreditCardID, 
+	CreditCardApprovalCode, 
+	CurrencyRateID, 
+	SubTotal, 
+	Freight, 
+	TaxAmt, 
+	Comment, 
+	ModifiedDate, 
+	ISNULL(CONCAT(N'SO' , CONVERT([nvarchar])(23), SalesOrderID), N'*** ERROR ***') AS SalesOrderNumber, 
+	IFNULL(SubTotal + TaxAmt + Freight, 0) AS TotalDue
+FROM Sales.SalesOrderHeader_inmem;
+ 
+
+
+IF object_id('[Sales].[vSalesOrderDetail_extended_inmem]') IS NOT NULL THEN
+	DROP VIEW
+END IF; `Sales`.`vSalesOrderDetail_extended_inmem` 
+GO
+IF object_id('[Sales].[SalesOrderDetail_inmem]') IS NOT NULL THEN
+	DROP TABLE `Sales`.SalesOrderDetail_inmem;
+END IF; 
+ 
+-- SQLINES LICENSE FOR EVALUATION USE ONLY
+CREATE TABLE `Sales`.SalesOrderDetail_inmem(
+	`SalesOrderID` int NOT NULL INDEX IX_SalesOrderID HASH (BUCKET_COUNT=10000000);,
+	`SalesOrderDetailID` bigint IDENTITY NOT NULL,
+	`CarrierTrackingNumber` [nvarchar](25) NULL,
+	`OrderQty` `smallint` NOT NULL,
+	`ProductID` `int` NOT NULL INDEX IX_ProductID HASH WITH (BUCKET_COUNT=1000000),
+	`SpecialOfferID` `int` NOT NULL,
+	`UnitPrice` `money` NOT NULL,
+	`UnitPriceDiscount` `money` NOT NULL CONSTRAINT `IMDF_SalesOrderDetail_UnitPriceDiscount`  DEFAULT ((0.0)),
+	`ModifiedDate` `datetime2` NOT NULL ,
+
+	CONSTRAINT `imPK_SalesOrderDetail_SalesOrderID_SalesOrderDetailID` PRIMARY KEY NONCLUSTERED HASH 
+	(	`SalesOrderID`,
+		[SalesOrderDetailID]
+	)WITH (BUCKET_COUNT=50000000)
+) WITH (MEMORY_OPTIMIZED=ON)
+GO
+
+-- SQLINES DEMO *** r LineTotal is included in this view
+IF object_id('[Sales].[vSalesOrderDetail_extended_inmem]') IS NOT NULL THEN
+	DROP VIEW
+END IF; `Sales`.`vSalesOrderDetail_extended_inmem` 
+GO
+CREATE VIEW Sales.[vSalesOrderDetail_extended_inmem]
+WITH SCHEMABINDING
+AS
+SELECT SalesOrderID, 
+	SalesOrderDetailID, 
+	CarrierTrackingNumber, 
+	OrderQty, 
+	ProductID, 
+	SpecialOfferID, 
+	UnitPrice, 
+	UnitPriceDiscount, 
+	ModifiedDate, 
+	IFNULL(UnitPrice * (1.0 - UnitPriceDiscount) * OrderQty, 0.0) AS LineTotal
+FROM Sales.SalesOrderDetail_inmem
+GO
+
+-- SQLINES DEMO *** s when creating new sales orders
+IF type_id('[Sales].[SalesOrderDetailType_inmem]') IS NOT NULL THEN
+	DROP TYPE
+END IF; `Sales`.`SalesOrderDetailType_inmem` 
+GO
+CREATE TYPE [Sales].[SalesOrderDetailType_inmem] AS TABLE(
+	[OrderQty] [smallint] NOT NULL,
+	`ProductID` `int` NOT NULL INDEX IX_ProductID NONCLUSTERED HASH WITH (BUCKET_COUNT=8),
+	`SpecialOfferID` `int` NOT NULL INDEX IX_SpecialOfferID NONCLUSTERED HASH WITH (BUCKET_COUNT=8)
+) WITH (MEMORY_OPTIMIZED=ON)
+GO
+
+
+IF object_id('Sales.usp_DeleteSpecialOffer_inmem') IS NOT NULL THEN
+	DROP PROCEDURE Sales.usp_DeleteSpecialOffer_inmem;
+END IF;
+ 
+IF object_id('Sales.usp_InsertSpecialOfferProduct_inmem') IS NOT NULL THEN
+	DROP PROCEDURE Sales.usp_InsertSpecialOfferProduct_inmem;
+END IF;
+ 
+IF object_id('Sales.usp_InsertSpecialOffer_inmem') IS NOT NULL THEN
+	DROP PROCEDURE Sales.usp_InsertSpecialOffer_inmem;
+END IF;
+ 
+IF object_id('[Sales].[SpecialOffer_inmem]') IS NOT NULL THEN
+	DROP TABLE `Sales`.SpecialOffer_inmem;
+END IF; 
+ 
+-- SQLINES LICENSE FOR EVALUATION USE ONLY
+CREATE TABLE `Sales`.SpecialOffer_inmem(
+	`SpecialOfferID` int AUTO_INCREMENT NOT NULL,
+	`Description` nvarchar(255) NOT NULL,
+	`DiscountPct` Decimal(6,4) NOT NULL CONSTRAINT [IMDF_SpecialOffer_DiscountPct]  DEFAULT ((0.00)),
+	`Type` nvarchar(50) NOT NULL,
+	`Category` nvarchar(50) NOT NULL,
+	`StartDate` Datetime(6) NOT NULL,
+	`EndDate` Datetime(6) NOT NULL,
+	`MinQty` int NOT NULL CONSTRAINT [IMDF_SpecialOffer_MinQty]  DEFAULT ((0)),
+	`MaxQty` int NULL,
+	`ModifiedDate` Datetime(6) NOT NULL CONSTRAINT [IMDF_SpecialOffer_ModifiedDate]  DEFAULT (SYSDATETIME()),
+
+	CONSTRAINT `IMPK_SpecialOffer_SpecialOfferID` PRIMARY KEY HASH
+	([SpecialOfferID]); WITH (BUCKET_COUNT=1000000)
+) WITH (MEMORY_OPTIMIZED=ON)
+GO
+
+IF object_id('Production.usp_DeleteProduct_inmem') IS NOT NULL THEN
+	DROP PROCEDURE Production.usp_DeleteProduct_inmem;
+END IF;
+ 
+IF object_id('Sales.usp_DeleteSpecialOffer_inmem') IS NOT NULL THEN
+	DROP PROCEDURE Sales.usp_DeleteSpecialOffer_inmem;
+END IF;
+ 
+IF object_id('Sales.usp_InsertSpecialOfferProduct_inmem') IS NOT NULL THEN
+	DROP PROCEDURE Sales.usp_InsertSpecialOfferProduct_inmem;
+END IF;
+ 
+IF object_id('[Sales].[SpecialOfferProduct_inmem]') IS NOT NULL THEN
+	DROP TABLE `Sales`.SpecialOfferProduct_inmem;
+END IF; 
+ 
+-- SQLINES LICENSE FOR EVALUATION USE ONLY
+CREATE TABLE `Sales`.SpecialOfferProduct_inmem(
+	`SpecialOfferID` int NOT NULL,
+	`ProductID` int NOT NULL INDEX ix_ProductID,
+	`ModifiedDate` Datetime(6) NOT NULL CONSTRAINT [IMDF_SpecialOfferProduct_ModifiedDate]  DEFAULT (SYSDATETIME()),
+	CONSTRAINT `IMPK_SpecialOfferProduct_SpecialOfferID_ProductID` PRIMARY KEY 
+	(	`SpecialOfferID`, `ProductID`)
+); WITH (MEMORY_OPTIMIZED=ON)
+GO
+
+IF object_id('Production.usp_InsertProduct_inmem') IS NOT NULL THEN
+	DROP PROCEDURE Production.usp_InsertProduct_inmem;
+END IF;
+ 
+IF object_id('Production.usp_DeleteProduct_inmem') IS NOT NULL THEN
+	DROP PROCEDURE Production.usp_DeleteProduct_inmem;
+END IF;
+ 
+IF object_id('[Production].[Product_inmem]') IS NOT NULL THEN
+	DROP TABLE `Production`.Product_inmem;
+END IF; 
+ 
+-- SQLINES LICENSE FOR EVALUATION USE ONLY
+CREATE TABLE `Production`.Product_inmem(
+	`ProductID` int AUTO_INCREMENT NOT NULL,
+	`Name` nvarchar(50) COLLATE Latin1_General_100_BIN2 NOT NULL INDEX IX_Name,
+	`ProductNumber` nvarchar(25) COLLATE Latin1_General_100_BIN2 NOT NULL INDEX IX_ProductNumber,
+	`MakeFlag` tinyint NOT NULL CONSTRAINT [IMDF_Product_MakeFlag]  DEFAULT ((1)),
+	`FinishedGoodsFlag` tinyint NOT NULL CONSTRAINT [IMDF_Product_FinishedGoodsFlag]  DEFAULT ((1)),
+	`Color` nvarchar(15) NULL,
+	`SafetyStockLevel` smallint NOT NULL,
+	`ReorderPoint` smallint NOT NULL,
+	`StandardCost` Decimal(15,4) NOT NULL,
+	`ListPrice` Decimal(15,4) NOT NULL,
+	`Size` nvarchar(5) NULL,
+	`SizeUnitMeasureCode` nchar(3) NULL,
+	`WeightUnitMeasureCode` nchar(3) NULL,
+	`Weight` decimal(8, 2) NULL,
+	`DaysToManufacture` int NOT NULL,
+	`ProductLine` nchar(2) NULL,
+	`Class` nchar(2) NULL,
+	`Style` nchar(2) NULL,
+	`ProductSubcategoryID` int NULL,
+	`ProductModelID` int NULL,
+	`SellStartDate` Datetime(6) NOT NULL,
+	`SellEndDate` Datetime(6) NULL,
+	`DiscontinuedDate` Datetime(6) NULL,
+	`ModifiedDate` Datetime(6) NOT NULL CONSTRAINT [IMDF_Product_ModifiedDate]  DEFAULT (SYSDATETIME()),
+
+	CONSTRAINT `IMPK_Product_ProductID` PRIMARY KEY HASH
+	( [ProductID] ); WITH (BUCKET_COUNT=1000000)
+)	WITH (MEMORY_OPTIMIZED=ON)
+GO
+
+IF object_id('[Sales].[SalesOrderHeader_ondisk]') IS NOT NULL THEN
+	DROP TABLE `Sales`.SalesOrderHeader_ondisk;
+END IF; 
+ 
+-- SQLINES LICENSE FOR EVALUATION USE ONLY
+CREATE TABLE `Sales`.SalesOrderHeader_ondisk(
+	`SalesOrderID` int AUTO_INCREMENT NOT NULL PRIMARY KEY,
+	`RevisionNumber` tinyint Unsigned NOT NULL CONSTRAINT [ODDF_SalesOrderHeader_RevisionNumber]  DEFAULT ((0)),
+	`OrderDate` Datetime(6) NOT NULL ,
+	`DueDate` Datetime(6) NOT NULL,
+	`ShipDate` Datetime(6) NULL,
+	`Status` tinyint Unsigned NOT NULL CONSTRAINT [ODDF_SalesOrderHeader_Status]  DEFAULT ((1)),
+	`OnlineOrderFlag` tinyint NOT NULL CONSTRAINT [ODDF_SalesOrderHeader_OnlineOrderFlag]  DEFAULT ((1)),  
+	`PurchaseOrderNumber` nvarchar(25) NULL, 
+	`AccountNumber` nvarchar(15) NULL, 
+	`CustomerID` int NOT NULL ,
+	`SalesPersonID` int NOT NULL CONSTRAINT [ODDF_SalesOrderHeader_SalesPersonID]  DEFAULT ((-1)), 
+	`TerritoryID` int NULL,
+	`BillToAddressID` int NOT NULL,
+	`ShipToAddressID` int NOT NULL,
+	`ShipMethodID` int NOT NULL,
+	`CreditCardID` int NULL,
+	`CreditCardApprovalCode` varchar(15) NULL,
+	`CurrencyRateID` int NULL,
+	`SubTotal` Decimal(15,4) NOT NULL CONSTRAINT [ODDF_SalesOrderHeader_SubTotal]  DEFAULT ((0.00)),
+	`TaxAmt` Decimal(15,4) NOT NULL CONSTRAINT [ODDF_SalesOrderHeader_TaxAmt]  DEFAULT ((0.00)),
+	`Freight` Decimal(15,4) NOT NULL CONSTRAINT [ODDF_SalesOrderHeader_Freight]  DEFAULT ((0.00)),
+	`Comment` nvarchar(128) NULL,
+	`ModifiedDate` Datetime(6) NOT NULL
+
+	INDEX IX_SalesPersonID (SalesPersonID)
+	INDEX IX_CustomerID (CustomerID)
+	INDEX IX_OrderDate (OrderDate ASC)
+); 
+
+
+IF object_id('[Sales].[SalesOrderDetail_ondisk]') IS NOT NULL THEN
+	DROP TABLE `Sales`.SalesOrderDetail_ondisk;
+END IF; 
+ 
+-- SQLINES LICENSE FOR EVALUATION USE ONLY
+CREATE TABLE `Sales`.SalesOrderDetail_ondisk(
+	`SalesOrderID` int NOT NULL,
+	`SalesOrderDetailID` bigint AUTO_INCREMENT NOT NULL,
+	`CarrierTrackingNumber` nvarchar(25) NULL,
+	`OrderQty` smallint NOT NULL,
+	`ProductID` int NOT NULL INDEX IX_ProductID NONCLUSTERED,
+	`SpecialOfferID` int NOT NULL,
+	`UnitPrice` Decimal(15,4) NOT NULL,
+	`UnitPriceDiscount` Decimal(15,4) NOT NULL CONSTRAINT [ODDF_SalesOrderDetail_UnitPriceDiscount]  DEFAULT ((0.0)),
+	`ModifiedDate` Datetime(6) NOT NULL ,
+
+	CONSTRAINT `ODPK_SalesOrderDetail_SalesOrderID_SalesOrderDetailID` PRIMARY KEY  
+	(	`SalesOrderID`,	`SalesOrderDetailID`)
+); 
+
+
+
+IF object_id('Sales.usp_InsertSalesOrder_ondisk') IS NOT NULL THEN
+	DROP PROCEDURE Sales.usp_InsertSalesOrder_ondisk;
+END IF; 
+ 
+IF type_id('Sales.SalesOrderDetailType_ondisk') IS NOT NULL THEN
+	DROP TYPE
+END IF; `Sales`.`SalesOrderDetailType_ondisk` 
+GO
+CREATE TYPE [Sales].[SalesOrderDetailType_ondisk] AS TABLE(
+	[OrderQty] [smallint] NOT NULL,
+	`ProductID` `int` NOT NULL INDEX IX_ProductID CLUSTERED,
+	`SpecialOfferID` `int` NOT NULL INDEX IX_SpecialOfferID NONCLUSTERED
+)
+GO
+
+
+
+IF object_id('[Sales].[SpecialOffer_ondisk]') IS NOT NULL THEN
+	DROP TABLE `Sales`.SpecialOffer_ondisk;
+END IF; 
+ 
+-- SQLINES LICENSE FOR EVALUATION USE ONLY
+CREATE TABLE `Sales`.SpecialOffer_ondisk(
+	`SpecialOfferID` int AUTO_INCREMENT NOT NULL,
+	`Description` nvarchar(255) NOT NULL,
+	`DiscountPct` Decimal(6,4) NOT NULL CONSTRAINT [ODDF_SpecialOffer_DiscountPct]  DEFAULT ((0.00)),
+	`Type` nvarchar(50) NOT NULL,
+	`Category` nvarchar(50) NOT NULL,
+	`StartDate` Datetime(6) NOT NULL,
+	`EndDate` Datetime(6) NOT NULL,
+	`MinQty` int NOT NULL CONSTRAINT [ODDF_SpecialOffer_MinQty]  DEFAULT ((0)),
+	`MaxQty` int NULL,
+	`ModifiedDate` Datetime(6) NOT NULL CONSTRAINT [ODDF_SpecialOffer_ModifiedDate]  DEFAULT (SYSDATETIME()),
+	CONSTRAINT `ODPK_SpecialOffer_SpecialOfferID` PRIMARY KEY (`SpecialOfferID` ASC)
+);
+
+
+IF object_id('[Production].[Product_ondisk]') IS NOT NULL THEN
+	DROP TABLE Production.Product_ondisk;
+END IF; 
+ 
+-- SQLINES LICENSE FOR EVALUATION USE ONLY
+CREATE TABLE `Production`.Product_ondisk(
+	`ProductID` int AUTO_INCREMENT NOT NULL,
+	`Name` nvarchar(50) COLLATE Latin1_General_100_BIN2 NOT NULL INDEX IX_Name,
+	`ProductNumber` nvarchar(25) COLLATE Latin1_General_100_BIN2 NOT NULL INDEX IX_ProductNumber,
+	`MakeFlag` tinyint NOT NULL CONSTRAINT [ODDF_Product_MakeFlag]  DEFAULT ((1)),
+	`FinishedGoodsFlag` tinyint NOT NULL CONSTRAINT [ODDF_Product_FinishedGoodsFlag]  DEFAULT ((1)),
+	`Color` nvarchar(15) NULL,
+	`SafetyStockLevel` smallint NOT NULL,
+	`ReorderPoint` smallint NOT NULL,
+	`StandardCost` Decimal(15,4) NOT NULL,
+	`ListPrice` Decimal(15,4) NOT NULL,
+	`Size` nvarchar(5) NULL,
+	`SizeUnitMeasureCode` nchar(3) NULL,
+	`WeightUnitMeasureCode` nchar(3) NULL,
+	`Weight` decimal(8, 2) NULL,
+	`DaysToManufacture` int NOT NULL,
+	`ProductLine` nchar(2) NULL,
+	`Class` nchar(2) NULL,
+	`Style` nchar(2) NULL,
+	`ProductSubcategoryID` int NULL,
+	`ProductModelID` int NULL,
+	`SellStartDate` Datetime(6) NOT NULL,
+	`SellEndDate` Datetime(6) NULL,
+	`DiscontinuedDate` Datetime(6) NULL,
+	`ModifiedDate` Datetime(6) NOT NULL CONSTRAINT [ODDF_Product_ModifiedDate]  DEFAULT (SYSDATETIME()),
+	CONSTRAINT `ODPK_Product_ProductID` PRIMARY KEY (`ProductID`) 
+);
+
+/* SQLINES DEMO *** ******** Load data into migrated tables, as well as comparison tables **********************************/
+
+SET IDENTITY_INSERT Sales.SalesOrderHeader_inmem ON
+INSERT INTO Sales.SalesOrderHeader_inmem
+	(`SalesOrderID`,
+	`RevisionNumber`,
+	`OrderDate`,
+	`DueDate`,
+	`ShipDate`,
+	`Status`,
+	`OnlineOrderFlag`,
+	`PurchaseOrderNumber`,
+	`AccountNumber`,
+	`CustomerID`,
+	`SalesPersonID`,
+	`TerritoryID`,
+	`BillToAddressID`,
+	`ShipToAddressID`,
+	`ShipMethodID`,
+	`CreditCardID`,
+	`CreditCardApprovalCode`,
+	`CurrencyRateID`,
+	`SubTotal`,
+	`TaxAmt`,
+	`Freight`,
+	`Comment`,
+	`ModifiedDate`)
+-- SQLINES LICENSE FOR EVALUATION USE ONLY
+SELECT
+	`SalesOrderID`,
+	`RevisionNumber`,
+	`OrderDate`,
+	`DueDate`,
+	`ShipDate`,
+	`Status`,
+	`OnlineOrderFlag`,
+	`PurchaseOrderNumber`,
+	`AccountNumber`,
+	`CustomerID`,
+	IFNULL(`SalesPersonID`,-1),
+	`TerritoryID`,
+	`BillToAddressID`,
+	`ShipToAddressID`,
+	`ShipMethodID`,
+	`CreditCardID`,
+	`CreditCardApprovalCode`,
+	`CurrencyRateID`,
+	`SubTotal`,
+	`TaxAmt`,
+	`Freight`,
+	`Comment`,
+	`ModifiedDate`
+FROM Sales.SalesOrderHeader
+SET IDENTITY_INSERT Sales.SalesOrderHeader_inmem OFF
+GO
+
+SET IDENTITY_INSERT Sales.SalesOrderHeader_ondisk ON
+INSERT INTO Sales.SalesOrderHeader_ondisk
+	(`SalesOrderID`,
+	`RevisionNumber`,
+	`OrderDate`,
+	`DueDate`,
+	`ShipDate`,
+	`Status`,
+	`OnlineOrderFlag`,
+	`PurchaseOrderNumber`,
+	`AccountNumber`,
+	`CustomerID`,
+	`SalesPersonID`,
+	`TerritoryID`,
+	`BillToAddressID`,
+	`ShipToAddressID`,
+	`ShipMethodID`,
+	`CreditCardID`,
+	`CreditCardApprovalCode`,
+	`CurrencyRateID`,
+	`SubTotal`,
+	`TaxAmt`,
+	`Freight`,
+	`Comment`,
+	`ModifiedDate`)
+-- SQLINES LICENSE FOR EVALUATION USE ONLY
+SELECT *
+FROM Sales.SalesOrderHeader_inmem
+SET IDENTITY_INSERT Sales.SalesOrderHeader_ondisk OFF
+GO
+
+SET IDENTITY_INSERT Sales.SalesOrderDetail_inmem ON
+INSERT INTO Sales.SalesOrderDetail_inmem
+	(`SalesOrderID`,
+	`SalesOrderDetailID`,
+	`CarrierTrackingNumber`,
+	`OrderQty`,
+	`ProductID`,
+	`SpecialOfferID`,
+	`UnitPrice`,
+	`UnitPriceDiscount`,
+	`ModifiedDate`)
+-- SQLINES LICENSE FOR EVALUATION USE ONLY
+SELECT
+	`SalesOrderID`,
+	`SalesOrderDetailID`,
+	`CarrierTrackingNumber`,
+	`OrderQty`,
+	`ProductID`,
+	`SpecialOfferID`,
+	`UnitPrice`,
+	`UnitPriceDiscount`,
+	`ModifiedDate`
+FROM Sales.SalesOrderDetail
+SET IDENTITY_INSERT Sales.SalesOrderDetail_inmem OFF
+GO
+
+SET IDENTITY_INSERT Sales.SalesOrderDetail_ondisk ON
+INSERT INTO Sales.SalesOrderDetail_ondisk
+	(`SalesOrderID`,
+	`SalesOrderDetailID`,
+	`CarrierTrackingNumber`,
+	`OrderQty`,
+	`ProductID`,
+	`SpecialOfferID`,
+	`UnitPrice`,
+	`UnitPriceDiscount`,
+	`ModifiedDate`)
+-- SQLINES LICENSE FOR EVALUATION USE ONLY
+SELECT *
+FROM Sales.SalesOrderDetail_inmem
+SET IDENTITY_INSERT Sales.SalesOrderDetail_ondisk OFF
+GO
+
+
+
+
+SET IDENTITY_INSERT Sales.SpecialOffer_inmem ON
+INSERT INTO Sales.SpecialOffer_inmem
+	(`SpecialOfferID`,
+	`Description`,
+	`DiscountPct`,
+	`Type`,
+	`Category`,
+	`StartDate`,
+	`EndDate`,
+	`MinQty`,
+	`MaxQty`,
+	`ModifiedDate`)
+-- SQLINES LICENSE FOR EVALUATION USE ONLY
+SELECT
+	`SpecialOfferID`,
+	`Description`,
+	`DiscountPct`,
+	`Type`,
+	`Category`,
+	`StartDate`,
+	`EndDate`,
+	`MinQty`,
+	`MaxQty`,
+	`ModifiedDate`
+FROM Sales.SpecialOffer
+SET IDENTITY_INSERT Sales.SpecialOffer_inmem OFF
+GO
+
+SET IDENTITY_INSERT Sales.SpecialOffer_ondisk ON
+INSERT INTO [Sales].[SpecialOffer_ondisk] 
+	(`SpecialOfferID`,
+	`Description`,
+	`DiscountPct`,
+	`Type`,
+	`Category`,
+	`StartDate`,
+	`EndDate`,
+	`MinQty`,
+	`MaxQty`,
+	`ModifiedDate`)
+-- SQLINES LICENSE FOR EVALUATION USE ONLY
+SELECT * FROM Sales.SpecialOffer_inmem
+SET IDENTITY_INSERT Sales.SpecialOffer_ondisk OFF
+GO
+
+
+
+INSERT INTO Sales.SpecialOfferProduct_inmem
+SELECT
+	`SpecialOfferID`,
+	ProductID,
+	`ModifiedDate`
+FROM Sales.SpecialOfferProduct;
+ 
+
+
+
+
+
+SET IDENTITY_INSERT `Production`.`Product_inmem` ON
+INSERT INTO [Production].[Product_inmem]
+	(`ProductID`,
+	`Name`,
+	`ProductNumber`,
+	`MakeFlag`,
+	`FinishedGoodsFlag`,
+	`Color`,
+	`SafetyStockLevel`,
+	`ReorderPoint`,
+	`StandardCost`,
+	`ListPrice`,
+	`Size`,
+	`SizeUnitMeasureCode`,
+	`WeightUnitMeasureCode`,
+	`Weight`,
+	`DaysToManufacture`,
+	`ProductLine`,
+	`Class`,
+	`Style`,
+	`ProductSubcategoryID`,
+	`ProductModelID`,
+	`SellStartDate`,
+	`SellEndDate`,
+	`DiscontinuedDate`,
+	`ModifiedDate`)
+-- SQLINES LICENSE FOR EVALUATION USE ONLY
+SELECT
+	`ProductID`,
+	`Name`,
+	`ProductNumber`,
+	`MakeFlag`,
+	`FinishedGoodsFlag`,
+	`Color`,
+	`SafetyStockLevel`,
+	`ReorderPoint`,
+	`StandardCost`,
+	`ListPrice`,
+	`Size`,
+	`SizeUnitMeasureCode`,
+	`WeightUnitMeasureCode`,
+	`Weight`,
+	`DaysToManufacture`,
+	`ProductLine`,
+	`Class`,
+	`Style`,
+	`ProductSubcategoryID`,
+	`ProductModelID`,
+	`SellStartDate`,
+	`SellEndDate`,
+	`DiscontinuedDate`,
+	`ModifiedDate`
+FROM `Production`.Product
+SET IDENTITY_INSERT `Production`.`Product_inmem` OFF
+GO
+
+SET IDENTITY_INSERT `Production`.`Product_ondisk` ON
+INSERT INTO [Production].[Product_ondisk]
+	(`ProductID`,
+	`Name`,
+	`ProductNumber`,
+	`MakeFlag`,
+	`FinishedGoodsFlag`,
+	`Color`,
+	`SafetyStockLevel`,
+	`ReorderPoint`,
+	`StandardCost`,
+	`ListPrice`,
+	`Size`,
+	`SizeUnitMeasureCode`,
+	`WeightUnitMeasureCode`,
+	`Weight`,
+	`DaysToManufacture`,
+	`ProductLine`,
+	`Class`,
+	`Style`,
+	`ProductSubcategoryID`,
+	`ProductModelID`,
+	`SellStartDate`,
+	`SellEndDate`,
+	`DiscontinuedDate`,
+	`ModifiedDate`)
+-- SQLINES LICENSE FOR EVALUATION USE ONLY
+SELECT * FROM `Production`.Product_inmem
+SET IDENTITY_INSERT `Production`.`Product_ondisk` OFF
+GO
+
+
+
+/* SQLINES DEMO *** ******** Update statistics for memory-optimized tables **********************************/
+
+UPDATE STATISTICS Sales.[SalesOrderHeader_inmem]
+WITH FULLSCAN, NORECOMPUTE
+GO
+UPDATE STATISTICS Sales.[SalesOrderDetail_inmem]
+WITH FULLSCAN, NORECOMPUTE
+GO
+
+UPDATE STATISTICS Sales.SpecialOfferProduct_inmem
+WITH FULLSCAN, NORECOMPUTE
+GO
+UPDATE STATISTICS Sales.SpecialOffer_inmem
+WITH FULLSCAN, NORECOMPUTE
+GO
+
+UPDATE STATISTICS Production.Product_inmem
+WITH FULLSCAN, NORECOMPUTE
+GO
+
+/* SQLINES DEMO *** ******** Create stored procedures **********************************/
+
+IF object_id('Sales.usp_InsertSalesOrder_inmem') IS NOT NULL THEN
+	DROP PROCEDURE Sales.usp_InsertSalesOrder_inmem;
+END IF; 
+ 
+-- SQLINES LICENSE FOR EVALUATION USE ONLY
+DELIMITER //
+
+CREATE PROCEDURE Sales.usp_InsertSalesOrder_inmem (
+	OUT p_SalesOrderID int,
+	p_DueDate Datetime(6)) NOT NULL,
+	@CustomerID `int` NOT NULL,
+	@BillToAddressID `int` NOT NULL,
+	@ShipToAddressID `int` NOT NULL,
+	@ShipMethodID `int` NOT NULL,
+	@SalesOrderDetails Sales.SalesOrderDetailType_inmem READONLY,
+	@Status `tinyint` NOT NULL = 1,
+	@OnlineOrderFlag `bit` NOT NULL = 1,
+	@PurchaseOrderNumber [nvarchar](25) = NULL,
+	@AccountNumber [nvarchar](15) = NULL,
+	@SalesPersonID `int` NOT NULL = -1,
+	@TerritoryID `int` = NULL,
+	@CreditCardID `int` = NULL,
+	@CreditCardApprovalCode [varchar](15) = NULL,
+	@CurrencyRateID `int` = NULL,
+	@Comment nvarchar(128) = NULL
+WITH NATIVE_COMPILATION, SCHEMABINDING, CALL AS OWNER;
+AS
+BEGIN ATOMIC WITH
+  (TRANSACTION ISOLATION LEVEL = SNAPSHOT,
+   LANGUAGE = N'us_english')
+
+	DECLARE v_OrderDate datetime(6); NOT NULL = sysdatetime()
+
+	DECLARE v_SubTotal decimal(15,4); NOT NULL = 0
+
+	-- SQLINES LICENSE FOR EVALUATION USE ONLY
+	SELECT IFNULL(SUM(p.ListPrice * (1 - so.DiscountPct)),0) INTO v_SubTotal
+	FROM @SalesOrderDetails od JOIN Sales.SpecialOffer_inmem so on od.SpecialOfferID=so.SpecialOfferID
+		JOIN Production.Product_inmem p on od.ProductID=p.ProductID;
+
+	INSERT INTO Sales.SalesOrderHeader_inmem
+	(	DueDate,
+		Status,
+		OnlineOrderFlag,
+		PurchaseOrderNumber,
+		AccountNumber,
+		CustomerID,
+		SalesPersonID,
+		TerritoryID,
+		BillToAddressID,
+		ShipToAddressID,
+		ShipMethodID,
+		CreditCardID,
+		CreditCardApprovalCode,
+		CurrencyRateID,
+		Comment,
+		OrderDate,
+		SubTotal,
+		ModifiedDate)
+	VALUES
+	(	
+		p_DueDate,
+		@Status,
+		@OnlineOrderFlag,
+		@PurchaseOrderNumber,
+		@AccountNumber,
+		@CustomerID,
+		@SalesPersonID,
+		@TerritoryID,
+		@BillToAddressID,
+		@ShipToAddressID,
+		@ShipMethodID,
+		@CreditCardID,
+		@CreditCardApprovalCode,
+		@CurrencyRateID,
+		@Comment,
+		v_OrderDate,
+		v_SubTotal,
+		v_OrderDate
+	);
+
+    SET p_SalesOrderID = LAST_INSERT_ID();
+
+	INSERT INTO Sales.SalesOrderDetail_inmem
+	(
+		SalesOrderID,
+		OrderQty,
+		ProductID,
+		SpecialOfferID,
+		UnitPrice,
+		UnitPriceDiscount,
+		ModifiedDate
+	)
+    SELECT 
+		p_SalesOrderID,
+		od.OrderQty,
+		od.ProductID,
+		od.SpecialOfferID,
+		p.ListPrice,
+		p.ListPrice * so.DiscountPct,
+		v_OrderDate
+	FROM @SalesOrderDetails od JOIN Sales.SpecialOffer_inmem so on od.SpecialOfferID=so.SpecialOfferID
+		JOIN Production.Product_inmem p on od.ProductID=p.ProductID;
+
+END;
+
+END;
+//
+
+DELIMITER ;
+
+
+
+
+
+IF object_id('Sales.usp_InsertSalesOrder_ondisk') IS NOT NULL THEN
+	DROP PROCEDURE Sales.usp_InsertSalesOrder_ondisk;
+END IF; 
+ 
+-- SQLINES LICENSE FOR EVALUATION USE ONLY
+DELIMITER //
+
+CREATE PROCEDURE Sales.usp_InsertSalesOrder_ondisk (
+	OUT p_SalesOrderID int,
+	p_DueDate Datetime(6) ,
+	p_CustomerID int ,
+	p_BillToAddressID int ,
+	p_ShipToAddressID int ,
+	p_ShipMethodID int ,
+	p_SalesOrderDetails Sales.SalesOrderDetailType_ondisk) READONLY,
+	@Status `tinyint`  = 1,
+	@OnlineOrderFlag `bit` = 1,
+	@PurchaseOrderNumber [nvarchar](25) = NULL,
+	@AccountNumber [nvarchar](15) = NULL,
+	@SalesPersonID `int` = -1,
+	@TerritoryID `int` = NULL,
+	@CreditCardID `int` = NULL,
+	@CreditCardApprovalCode [varchar](15) = NULL,
+	@CurrencyRateID `int` = NULL,
+	@Comment nvarchar(128) = NULL
+AS
+BEGIN 
+	START TRANSACTION;
+	
+		DECLARE v_OrderDate datetime(6) DEFAULT sysdatetime();
+
+		DECLARE v_SubTotal decimal(15,4) DEFAULT 0;
+
+		-- SQLINES LICENSE FOR EVALUATION USE ONLY
+		SELECT IFNULL(SUM(p.ListPrice * (1 - so.DiscountPct)),0) INTO v_SubTotal
+		FROM @SalesOrderDetails od JOIN Sales.SpecialOffer_ondisk so on od.SpecialOfferID=so.SpecialOfferID
+			JOIN Production.Product_ondisk p on od.ProductID=p.ProductID;
+
+		INSERT INTO Sales.SalesOrderHeader_ondisk
+		(	DueDate,
+			Status,
+			OnlineOrderFlag,
+			PurchaseOrderNumber,
+			AccountNumber,
+			CustomerID,
+			SalesPersonID,
+			TerritoryID,
+			BillToAddressID,
+			ShipToAddressID,
+			ShipMethodID,
+			CreditCardID,
+			CreditCardApprovalCode,
+			CurrencyRateID,
+			Comment,
+			OrderDate,
+			SubTotal,
+			ModifiedDate)
+		VALUES
+		(	
+			p_DueDate,
+			@Status,
+			@OnlineOrderFlag,
+			@PurchaseOrderNumber,
+			@AccountNumber,
+			p_CustomerID,
+			@SalesPersonID,
+			@TerritoryID,
+			p_BillToAddressID,
+			p_ShipToAddressID,
+			p_ShipMethodID,
+			@CreditCardID,
+			@CreditCardApprovalCode,
+			@CurrencyRateID,
+			@Comment,
+			v_OrderDate,
+			v_SubTotal,
+			v_OrderDate
+		);
+
+		SET p_SalesOrderID = LAST_INSERT_ID();
+
+		INSERT INTO Sales.SalesOrderDetail_ondisk
+		(
+			SalesOrderID,
+			OrderQty,
+			ProductID,
+			SpecialOfferID,
+			UnitPrice,
+			UnitPriceDiscount,
+			ModifiedDate
+		)
+		SELECT 
+			p_SalesOrderID,
+			od.OrderQty,
+			od.ProductID,
+			od.SpecialOfferID,
+			p.ListPrice,
+			p.ListPrice * so.DiscountPct,
+			v_OrderDate
+		FROM @SalesOrderDetails od JOIN Sales.SpecialOffer_ondisk so on od.SpecialOfferID=so.SpecialOfferID
+			JOIN Production.Product_ondisk p on od.ProductID=p.ProductID;
+
+
+	COMMIT;
+END;
+
+END;
+//
+
+DELIMITER ;
+
+
+
+
+
+IF object_id('Sales.usp_UpdateSalesOrderShipInfo_native') IS NOT NULL THEN
+	DROP PROCEDURE Sales.usp_UpdateSalesOrderShipInfo_native;
+END IF; 
+ 
+-- SQLINES LICENSE FOR EVALUATION USE ONLY
+DELIMITER //
+
+CREATE PROCEDURE Sales.usp_UpdateSalesOrderShipInfo_native (
+	p_SalesOrderID int , 
+	p_ShipDate datetime(6),
+	p_Comment nvarchar(128),
+	p_Status tinyint unsigned,
+	p_TaxRate decimal(6,4),
+	p_Freight decimal(15,4),
+	p_CarrierTrackingNumber nvarchar(25))
+WITH NATIVE_COMPILATION, SCHEMABINDING, CALL AS OWNER;
+AS
+BEGIN ATOMIC WITH
+  (TRANSACTION ISOLATION LEVEL = SNAPSHOT,
+   LANGUAGE = N'us_english')
+
+	DECLARE v_now datetime(6) DEFAULT SYSDATETIME();
+
+	UPDATE Sales.SalesOrderDetail_inmem 
+	SET CarrierTrackingNumber = p_CarrierTrackingNumber, ModifiedDate = v_now
+	WHERE SalesOrderID = p_SalesOrderID;
+
+	UPDATE Sales.SalesOrderHeader_inmem
+	SET RevisionNumber = RevisionNumber + 1,
+		ShipDate = p_ShipDate,
+		Status = p_Status,
+		TaxAmt = SubTotal * p_TaxRate,
+		Freight = p_Freight,
+		ModifiedDate = v_now
+	WHERE SalesOrderID = p_SalesOrderID;
+
+END;
+
+END;
+//
+
+DELIMITER ;
+
+
+
+
+IF object_id('Sales.usp_UpdateSalesOrderShipInfo_inmem') IS NOT NULL THEN
+	DROP PROCEDURE Sales.usp_UpdateSalesOrderShipInfo_inmem;
+END IF; 
+ 
+-- SQLINES DEMO *** e assume all items in the order are shipped in the same package, and thus have the same carrier tracking number
+-- SQLINES LICENSE FOR EVALUATION USE ONLY
+DELIMITER //
+
+CREATE PROCEDURE Sales.usp_UpdateSalesOrderShipInfo_inmem (
+	p_SalesOrderID int , 
+	p_ShipDate datetime(6) /* = NULL */,
+	p_Comment nvarchar(128) /* = NULL */,
+	p_Status tinyint unsigned,
+	p_TaxRate decimal(6,4) /* = 0 */,
+	p_Freight decimal(15,4),
+	p_CarrierTrackingNumber nvarchar(25))
+BEGIN
+
+  DECLARE v_retry INT DEFAULT 10;
+  SET p_ShipDate = IFNULL(p_ShipDate, SYSDATETIME());
+
+  WHILE (v_retry > 0)
+  DO
+    BEGIN TRY
+
+      CALL Sales.usp_UpdateSalesOrderShipInfo_native
+		v_SalesOrderID; = p_SalesOrderID, 
+		p_ShipDate = p_ShipDate,
+		p_Comment = p_Comment,
+		p_Status = p_Status,
+		p_TaxRate = p_TaxRate,
+		p_Freight = p_Freight,
+		p_CarrierTrackingNumber = p_CarrierTrackingNumber
+
+
+      SET v_retry = 0;
+    END; TRY
+    BEGIN CATCH
+      SET v_retry -= 1
+  
+      IF (v_retry > 0 AND error_number() in (41302, 41305, 41325, 41301))
+      THEN
+
+        IF XACT_STATE() <> 0 THEN 
+          ROLLBACK;
+        END IF;
+
+      ELSE
+        ;THROW
+      END IF;
+    END; CATCH
+  END WHILE;
+END;
+//
+
+DELIMITER ;
+
+
+
+IF object_id('Sales.usp_UpdateSalesOrderShipInfo_ondisk') IS NOT NULL THEN
+	DROP PROCEDURE Sales.usp_UpdateSalesOrderShipInfo_ondisk;
+END IF; 
+ 
+-- SQLINES DEMO *** e assume all items in the order are shipped in the same package, and thus have the same carrier tracking number
+-- SQLINES LICENSE FOR EVALUATION USE ONLY
+DELIMITER //
+
+CREATE PROCEDURE Sales.usp_UpdateSalesOrderShipInfo_ondisk (
+	p_SalesOrderID int , 
+	p_ShipDate datetime(6) /* = NULL */,
+	p_Comment nvarchar(128) /* = NULL */,
+	p_Status tinyint unsigned,
+	p_TaxRate decimal(6,4) /* = 0 */,
+	p_Freight decimal(15,4),
+	p_CarrierTrackingNumber nvarchar(25))
+BEGIN
+  SET p_ShipDate = IFNULL(p_ShipDate, SYSDATETIME());
+
+  START TRANSACTION;
+	DECLARE v_now datetime(6) DEFAULT SYSDATETIME();
+
+	UPDATE Sales.SalesOrderDetail_ondisk 
+	SET CarrierTrackingNumber = p_CarrierTrackingNumber, ModifiedDate = v_now
+	WHERE SalesOrderID = p_SalesOrderID;
+
+	UPDATE Sales.SalesOrderHeader_ondisk
+	SET RevisionNumber = RevisionNumber + 1,
+		ShipDate = p_ShipDate,
+		Status = p_Status,
+		TaxAmt = SubTotal * p_TaxRate,
+		Freight = p_Freight,
+		ModifiedDate = v_now
+	WHERE SalesOrderID = p_SalesOrderID;
+  COMMIT;
+
+END;
+//
+
+DELIMITER ;
+
+
+/* SQLINES DEMO *** ******** Demo harness **********************************/
+
+IF object_id('Demo.usp_DemoInsertSalesOrders') IS NOT NULL THEN
+	DROP PROCEDURE Demo.usp_DemoInsertSalesOrders;
+END IF; 
+ 
+IF object_id('Demo.usp_DemoInitSeed') IS NOT NULL THEN
+	DROP PROCEDURE Demo.usp_DemoInitSeed;
+END IF; 
+ 
+IF object_id('Demo.DemoSalesOrderDetailSeed') IS NOT NULL THEN
+	DROP TABLE Demo.DemoSalesOrderDetailSeed;
+END IF; 
+ 
+IF object_id('Demo.DemoSalesOrderHeaderSeed') IS NOT NULL THEN
+	DROP TABLE Demo.DemoSalesOrderHeaderSeed;
+END IF; 
+ 
+IF object_id('Demo.usp_DemoReset') IS NOT NULL THEN
+	DROP PROCEDURE Demo.usp_DemoReset;
+END IF; 
+ 
+IF schema_id('Demo') IS NOT NULL THEN
+	DROP SCHEMA Demo
+END IF;
+ 
+CREATE SCHEMA Demo;
+
+
+IF object_id('Demo.DemoSalesOrderDetailSeed') IS NOT NULL THEN
+	DROP TABLE Demo.DemoSalesOrderDetailSeed;
+END IF; 
+ 
+-- SQLINES LICENSE FOR EVALUATION USE ONLY
+CREATE TABLE Demo.DemoSalesOrderDetailSeed
+(
+	`OrderQty` smallint NOT NULL,
+	`ProductID` int NOT NULL ,
+	`SpecialOfferID` int NOT NULL,
+	OrderID int NOT NULL INDEX IX_OrderID NONCLUSTERED HASH (BUCKET_COUNT=1000000);,
+	LocalID int IDENTITY NOT NULL PRIMARY KEY NONCLUSTERED	
+) WITH (MEMORY_OPTIMIZED=ON)
+GO
+
+IF object_id('Demo.DemoSalesOrderHeaderSeed') IS NOT NULL THEN
+	DROP TABLE Demo.DemoSalesOrderHeaderSeed;
+END IF; 
+ 
+-- SQLINES LICENSE FOR EVALUATION USE ONLY
+CREATE TABLE Demo.DemoSalesOrderHeaderSeed
+(
+	DueDate Datetime(6) NOT NULL,
+	CustomerID int NOT NULL,
+	SalesPersonID int NOT NULL,
+	BillToAddressID int NOT NULL,
+	ShipToAddressID int NOT NULL,
+	ShipMethodID int NOT NULL,
+	LocalID int AUTO_INCREMENT NOT NULL PRIMARY KEY NONCLUSTERED	
+); WITH (MEMORY_OPTIMIZED=ON)
+GO
+
+
+IF object_id('Demo.usp_DemoInitSeed') IS NOT NULL THEN
+	DROP PROCEDURE Demo.usp_DemoInitSeed;
+END IF; 
+ 
+-- SQLINES LICENSE FOR EVALUATION USE ONLY
+DELIMITER //
+
+CREATE PROCEDURE Demo.usp_DemoInitSeed ( p_items_per_order int /* = 5 */)
+BEGIN
+	DECLARE v_ProductID int; DECLARE v_SpecialOfferID int;
+		DECLARE v_i int DEFAULT 1;
+	DECLARE v_seed_order_count int DEFAULT (SELECT COUNT(*)/p_items_per_order FROM Sales.SpecialOfferProduct_inmem);
+
+	DECLARE seed_cursor CURSOR FOR 
+		SELECT 
+			ProductID,
+			SpecialOfferID 
+		FROM Sales.SpecialOfferProduct_inmem
+
+	OPEN; seed_cursor
+
+	FETCH NEXT FROM; seed_cursor 
+	INTO v_ProductID, v_SpecialOfferID
+
+	START TRANSACTION;
+
+		DELETE FROM Demo.DemoSalesOrderHeaderSeed;
+
+		INSERT INTO Demo.DemoSalesOrderHeaderSeed
+		(
+			DueDate,
+			CustomerID,
+			SalesPersonID,
+			BillToAddressID,
+			ShipToAddressID,
+			ShipMethodID
+		)
+		SELECT
+			timestampadd(d, (rand(BillToAddressID*CustomerID)*10)+1,cast(sysdatetime() as date)),
+			CustomerID,
+			SalesPersonID,
+			BillToAddressID,
+			ShipToAddressID,
+			ShipMethodID
+		FROM Sales.SalesOrderHeader_inmem
+
+
+		WHILE; @@FETCH_STATUS = 0
+		BEGIN
+			INSERT Demo.DemoSalesOrderDetailSeed
+			SELECT 
+				v_i % 6 +; 1,
+				v_ProductID,
+				v_SpecialOfferID,
+				v_i % (v_seed_order_count+1)
+
+			SET v_i += 1
+
+			FETCH NEXT FROM; seed_cursor 
+			INTO v_ProductID, v_SpecialOfferID
+		END;
+
+		CLOSE seed_cursor;
+	COMMIT;
+
+	UPDATE STATISTICS Demo.DemoSalesOrderDetailSeed
+	WITH; FULLSCAN, NORECOMPUTE
+END;
+//
+
+DELIMITER ;
+
+
+
+
+/* SQLINES DEMO *** o.usp_DemoInsertSalesOrders') IS NOT NULL
+	DROP PROCEDURE Demo.usp_DemoInsertSalesOrders 
+go
+CREATE PROCEDURE Demo.usp_DemoInsertSalesOrders @use_inmem bit = 1, @order_count int = 100000, @include_update bit = 0
+AS
+BEGIN
+	SET NOCOUNT ON
+
+	DECLARE @max_OrderID int = (SELECT MAX(OrderID) FROM Demo.DemoSalesOrderDetailSeed)
+
+	DECLARE @i int = 1
+	DECLARE
+		@SalesOrderID int,
+		@DueDate datetime2,
+		@now datetime2 = sysdatetime(),
+		@OnlineOrderFlag bit = 1
+
+	DECLARE @Comment nvarchar(128)
+	DECLARE @TaxRate smallmoney
+	DECLARE @Freight money
+	DECLARE @CarrierTrackingNumber nvarchar(25),
+		@ShipDate datetime2
+	
+	WHILE @i <= @order_count
+	BEGIN
+		IF @use_inmem = 1
+		BEGIN
+			DECLARE @od Sales.SalesOrderDetailType_inmem
+			
+			SET @DueDate = DATEADD(d, (@i % 10) + 2, @now)
+
+			DELETE FROM @od
+
+			INSERT @od
+			SELECT OrderQty, ProductID, SpecialOfferID
+			FROM Demo.DemoSalesOrderDetailSeed
+			WHERE OrderID = @i % @max_OrderID
+
+
+			EXEC Sales.usp_InsertSalesOrder_inmem
+				@SalesOrderID = @SalesOrderID, 
+				@DueDate = @DueDate,
+				@OnlineOrderFlag = @OnlineOrderFlag,
+				@SalesOrderDetails = @od
+
+			IF @include_update = 1
+			BEGIN
+				SET @Comment = N'comment' + cast(@i as nvarchar)
+				SET @TaxRate = (@i % 10) / 100
+				SET @Freight = (@i % 500)/10
+				SET @CarrierTrackingNumber = N'DemoTrackingNr' + cast (@i AS nvarchar)
+				SET @ShipDate = @now
+				EXEC Sales.usp_UpdateSalesOrderShipInfo_inmem 
+					@SalesOrderID = @SalesOrderID, 
+					@ShipDate = @ShipDate, 
+					@Comment = @Comment, 
+					@Status=2, 
+					@TaxRate = @TaxRate, 
+					@Freight = @Freight,
+					@CarrierTrackingNumber = @CarrierTrackingNumber
+			END
+		END
+		ELSE BEGIN
+			DECLARE @odd Sales.SalesOrderDetailType_ondisk
+			SET @DueDate = DATEADD(d, (@i % 10) + 2, @now)
+
+			DELETE FROM @odd
+
+			INSERT @odd
+			SELECT OrderQty, ProductID, SpecialOfferID
+			FROM Demo.DemoSalesOrderDetailSeed
+			WHERE OrderID = @i % @max_OrderID
+
+			EXEC Sales.usp_InsertSalesOrder_ondisk
+				@SalesOrderID = @SalesOrderID, 
+				@DueDate = @DueDate,
+				@OnlineOrderFlag = @OnlineOrderFlag,
+				@SalesOrderDetails = @odd
+
+			IF @include_update = 1
+			BEGIN
+				SET @Comment = N'comment' + cast(@i as nvarchar)
+				SET @TaxRate = (@i % 10) / 100
+				SET @Freight = (@i % 500)/10
+				SET @CarrierTrackingNumber = N'DemoTrackingNr' + cast (@i AS nvarchar)
+				SET @ShipDate = @now
+				EXEC Sales.usp_UpdateSalesOrderShipInfo_ondisk
+					@SalesOrderID = @SalesOrderID, 
+					@ShipDate = @ShipDate, 
+					@Comment = @Comment, 
+					@Status=2, 
+					@TaxRate = @TaxRate, 
+					@Freight = @Freight,
+					@CarrierTrackingNumber = @CarrierTrackingNumber
+			END
+		END
+
+		SET @i += 1
+	END
+
+END
+GO
+
+*/
+
+IF object_id('Demo.usp_DemoReset') IS NOT NULL THEN
+	DROP PROCEDURE Demo.usp_DemoReset;
+END IF; 
+ 
+-- SQLINES LICENSE FOR EVALUATION USE ONLY
+DELIMITER //
+
+CREATE PROCEDURE Demo.usp_DemoReset()
+BEGIN
+	truncate table Sales.SalesOrderDetail_ondisk
+	delete from Sales.SalesOrderDetail_inmem;
+	truncate table Sales.SalesOrderHeader_ondisk
+	delete from Sales.SalesOrderHeader_inmem;
+	
+	CHECKPOINT
+
+	SET IDENTITY_INSERT Sales.SalesOrderHeader_inmem ON
+	INSERT INTO Sales.SalesOrderHeader_inmem
+		(`SalesOrderID`,
+		`RevisionNumber`,
+		`OrderDate`,
+		`DueDate`,
+		`ShipDate`,
+		`Status`,
+		`OnlineOrderFlag`,
+		`PurchaseOrderNumber`,
+		`AccountNumber`,
+		`CustomerID`,
+		`SalesPersonID`,
+		`TerritoryID`,
+		`BillToAddressID`,
+		`ShipToAddressID`,
+		`ShipMethodID`,
+		`CreditCardID`,
+		`CreditCardApprovalCode`,
+		`CurrencyRateID`,
+		`SubTotal`,
+		`TaxAmt`,
+		`Freight`,
+		`Comment`,
+		`ModifiedDate`)
+	-- SQLINES LICENSE FOR EVALUATION USE ONLY
+	SELECT
+		`SalesOrderID`,
+		`RevisionNumber`,
+		`OrderDate`,
+		`DueDate`,
+		`ShipDate`,
+		`Status`,
+		`OnlineOrderFlag`,
+		`PurchaseOrderNumber`,
+		`AccountNumber`,
+		`CustomerID`,
+		IFNULL(`SalesPersonID`,-1),
+		`TerritoryID`,
+		`BillToAddressID`,
+		`ShipToAddressID`,
+		`ShipMethodID`,
+		`CreditCardID`,
+		`CreditCardApprovalCode`,
+		`CurrencyRateID`,
+		`SubTotal`,
+		`TaxAmt`,
+		`Freight`,
+		`Comment`,
+		`ModifiedDate`
+	FROM Sales.SalesOrderHeader;
+	SET IDENTITY_INSERT Sales.SalesOrderHeader_inmem OFF
+
+
+	SET IDENTITY_INSERT Sales.SalesOrderHeader_ondisk ON
+	INSERT INTO Sales.SalesOrderHeader_ondisk
+		(`SalesOrderID`,
+		`RevisionNumber`,
+		`OrderDate`,
+		`DueDate`,
+		`ShipDate`,
+		`Status`,
+		`OnlineOrderFlag`,
+		`PurchaseOrderNumber`,
+		`AccountNumber`,
+		`CustomerID`,
+		`SalesPersonID`,
+		`TerritoryID`,
+		`BillToAddressID`,
+		`ShipToAddressID`,
+		`ShipMethodID`,
+		`CreditCardID`,
+		`CreditCardApprovalCode`,
+		`CurrencyRateID`,
+		`SubTotal`,
+		`TaxAmt`,
+		`Freight`,
+		`Comment`,
+		`ModifiedDate`)
+	-- SQLINES LICENSE FOR EVALUATION USE ONLY
+	SELECT *
+	FROM Sales.SalesOrderHeader_inmem;
+	SET IDENTITY_INSERT Sales.SalesOrderHeader_ondisk OFF
+
+
+	SET IDENTITY_INSERT Sales.SalesOrderDetail_inmem ON
+	INSERT INTO Sales.SalesOrderDetail_inmem
+		(`SalesOrderID`,
+		`SalesOrderDetailID`,
+		`CarrierTrackingNumber`,
+		`OrderQty`,
+		`ProductID`,
+		`SpecialOfferID`,
+		`UnitPrice`,
+		`UnitPriceDiscount`,
+		`ModifiedDate`)
+	-- SQLINES LICENSE FOR EVALUATION USE ONLY
+	SELECT
+		`SalesOrderID`,
+		`SalesOrderDetailID`,
+		`CarrierTrackingNumber`,
+		`OrderQty`,
+		`ProductID`,
+		`SpecialOfferID`,
+		`UnitPrice`,
+		`UnitPriceDiscount`,
+		`ModifiedDate`
+	FROM Sales.SalesOrderDetail;
+	SET IDENTITY_INSERT Sales.SalesOrderDetail_inmem OFF
+
+
+	SET IDENTITY_INSERT Sales.SalesOrderDetail_ondisk ON
+	INSERT INTO Sales.SalesOrderDetail_ondisk
+		(`SalesOrderID`,
+		`SalesOrderDetailID`,
+		`CarrierTrackingNumber`,
+		`OrderQty`,
+		`ProductID`,
+		`SpecialOfferID`,
+		`UnitPrice`,
+		`UnitPriceDiscount`,
+		`ModifiedDate`)
+	-- SQLINES LICENSE FOR EVALUATION USE ONLY
+	SELECT *
+	FROM Sales.SalesOrderDetail_inmem;
+	SET IDENTITY_INSERT Sales.SalesOrderDetail_ondisk OFF
+
+	CHECKPOINT
+END;
+//
+
+DELIMITER ;
+
+
+/* SQLINES DEMO *** ******************  Initialize Demo seed table ********************************************/
+
+CALL Demo.usp_DemoInitSeed;
+ 
+
+/* SQLINES DEMO *** ****************** Helper functions for generating integrity checks that are 
+									   not supported with memory-optimized tables in SQL Server 2014 ***********************/
+
+IF object_id('dbo.usp_GenerateFKCheck') IS NOT NULL THEN
+	DROP PROCEDURE usp_GenerateFKCheck;
+END IF;
+ 
+IF object_id('dbo.usp_GenerateUQCheck') IS NOT NULL THEN
+	DROP PROCEDURE usp_GenerateUQCheck;
+END IF;
+ 
+IF type_id('dbo.ColumnList') IS NOT NULL THEN
+	DROP TYPE
+END IF; dbo.ColumnList 
+go
+CREATE TYPE dbo.ColumnList AS TABLE
+(
+	[id] int AUTO_INCREMENT NOT NULL INDEX ix_id clustered,
+	name nvarchar(128) NOT NULL
+)
+GO
+
+IF object_id('dbo.usp_GenerateFKCheck') IS NOT NULL THEN
+	DROP PROCEDURE usp_GenerateFKCheck;
+END IF;
+ 
+/* SQLINES DEMO *** **
+Procedure for generating checks useful for validating and enforcing referential integrity, in the absence of foreign key constraints
+	to generate a point lookup check, suitable for enforcement at insert time, provide @reference_parameters; 
+		from @from_object and @from_clist are not needed in this case
+	to generate a validation query, suitable for referential integrity checks after the fact, provide @from_object and @from_clist; 
+		to validate integrity for the entire @from_object, do not provide @reference_parameters
+*********************/
+-- SQLINES LICENSE FOR EVALUATION USE ONLY
+DELIMITER //
+
+CREATE PROCEDURE usp_GenerateFKCheck (
+		p_from_object int /* = NULL */,
+		p_to_object int,
+		p_from_clist dbo.ColumnList) READONLY,
+		@to_clist dbo.ColumnList READONLY,
+		@reference_parameters dbo.ColumnList READONLY,
+		@sql_check_fk nvarchar(max) OUTPUT
+AS
+BEGIN		
+
+	IF (p_from_object IS NULL OR (SELECT COUNT(*) FROM @from_clist) = 0) AND (SELECT COUNT(*) FROM @reference_parameters)=0
+	THEN
+		;THROW 50001, N'Either provide @reference_parameters, for a point lookup, or provide @from_object and @from_clist to validate the entire table', 1
+	END IF;
+
+	-- SQLINES DEMO *** from object is specified
+	IF p_from_object IS NOT NULL AND (SELECT COUNT(*) FROM @from_clist) > 0
+	THEN
+		IF (SELECT COUNT(*) FROM @to_clist) != (SELECT COUNT(*) FROM @from_clist)
+		THEN
+			;THROW 50001, N'Parameter @to_clist must contain the same number of entries as @from_clist', 1
+		END IF;
+
+		SET v_sql_check_fk = CONCAT(N'	DECLARE @fk_violation bit = 0 
+		' 
+			, N'SELECT @fk_violation=1 FROM ' 
+			, quotename(object_schema_name(p_from_object))
+			, N'.' 
+			, quotename(object_name(p_from_object))
+			, N' t1');
+
+		SET v_sql_check_fk += CONCAT(N'
+		WHERE NOT EXISTS (SELECT * FROM '
+			, quotename(object_schema_name(p_to_object))
+			, N'.' 
+			, quotename(object_name(p_to_object))
+			, N' t2 WHERE 1=1')
+
+		-- SQLINES LICENSE FOR EVALUATION USE ONLY
+		SELECT @sql_check_fk += N' AND (t1.'; 
+			+ CONCAT(QUOTENAME(f.name) 
+			, N' IS NULL OR TRY_CAST(t1.'
+			, QUOTENAME(f.name) 
+			, ' AS int) = -1 OR t1.'
+			, QUOTENAME(f.name) 
+			, N'=t2.' 
+			, QUOTENAME(t.name) 
+			, N')')
+		FROM p_from_clist f JOIN @to_clist t ON f.id=t.id
+
+		-- SQLINES LICENSE FOR EVALUATION USE ONLY
+		SELECT @sql_check_fk += N')';
+	ELSE
+	-- SQLINES DEMO ***  no from object
+
+		SET v_sql_check_fk = CONCAT(N'	DECLARE @fk_violation bit = 1 
+		' 
+			, N'SELECT @fk_violation=0 FROM ' 
+			, quotename(object_schema_name(p_to_object))
+			, N'.' 
+			, quotename(object_name(p_to_object))
+			, N' t1');
+
+		SET v_sql_check_fk += N'
+		WHERE 1=1'
+
+	END IF;
+
+	-- filter parameters
+	IF EXISTS (SELECT id FROM @reference_parameters)
+	THEN
+		-- SQLINES LICENSE FOR EVALUATION USE ONLY
+		SELECT @sql_check_fk += N' AND t1.'; + CONCAT(QUOTENAME(t.name) 
+			, N'=' 
+			, p.name) 
+		FROM @to_clist t JOIN @reference_parameters p ON t.id=p.id
+	END IF;
+
+/* SQLINES DEMO *** k_fk += N'
+	OPTION (LOOP JOIN)'
+*/
+
+	SET v_sql_check_fk += CONCAT(N'
+	IF @fk_violation=1
+	BEGIN
+		'
+		, 'DECLARE @msg nvarchar(256) = N''Violation of referential integrity')
+	
+	IF p_from_object IS NOT NULL THEN
+		SET v_sql_check_fk
+	END IF; += Concat(' from table '
+			, quotename(object_schema_name(p_from_object))
+			, N'.' 
+			, quotename(object_name(p_from_object)))
+
+	SET v_sql_check_fk += Concat(' to table '
+		, quotename(object_schema_name(p_to_object))
+		, N'.' 
+		, quotename(object_name(p_to_object))
+		, '''')
+
+
+	SET v_sql_check_fk += '
+		;THROW 50001, @msg, 1
+	END
+	'
+END;
+
+END;
+//
+
+DELIMITER ;
+
+
+
+
+IF object_id('dbo.usp_GenerateCKCheck') IS NOT NULL THEN
+	DROP PROCEDURE usp_GenerateCKCheck;
+END IF;
+ 
+/* SQLINES DEMO *** **
+ Procedure for generating checks validating integrity of the data in a table, in the absence of check constraints
+	to generate a single value check, suitable for enforcement at insert time, only @ck_expression; 
+		do not provide @on_object
+	to generate a validation query, suitable for integrity checks after the fact, provide @on_object
+*********************/
+-- SQLINES LICENSE FOR EVALUATION USE ONLY
+DELIMITER //
+
+CREATE PROCEDURE usp_GenerateCKCheck (
+		p_ck_expression nvarchar(1000),
+		p_on_object int /* = NULL */,
+		OUT p_sql_check_ck longtext )
+BEGIN		
+
+	IF p_ck_expression IS NULL
+	THEN
+		;THROW 50001, N'Provide a valid logical expression for @ck_expression', 1
+	END IF;
+
+	-- SQLINES DEMO *** on object is specified
+	IF p_on_object IS NOT NULL
+	THEN
+		SET p_sql_check_ck = CONCAT(N'	DECLARE @ck_violation bit = 0 
+		' 
+			, N'SELECT @ck_violation=1 FROM ' 
+			, quotename(object_schema_name(p_on_object))
+			, N'.' 
+			, quotename(object_name(p_on_object))
+			, N' t1');
+
+		SET p_sql_check_ck += CONCAT(N'
+		WHERE NOT ('
+			, p_ck_expression
+			, N')')
+	ELSE
+	-- SQLINES DEMO ***  no on object
+
+		SET p_sql_check_ck = CONCAT(N'	DECLARE @ck_violation bit = 1 
+		' 
+			, N'IF ' 
+			, p_ck_expression
+			, N'
+				SET @ck_violation=0'); 
+	END IF;
+
+	SET p_sql_check_ck += CONCAT(N'
+	IF @ck_violation=1
+	BEGIN
+		'
+		, 'DECLARE @msg nvarchar(256) = N''Violation of integrity constraint ['
+		, replace(p_ck_expression, '''', '''''')
+		, ']')
+	
+	IF p_on_object IS NOT NULL THEN
+		SET p_sql_check_ck
+	END IF; += Concat(' on table '
+			, quotename(object_schema_name(p_on_object))
+			, N'.' 
+			, quotename(object_name(p_on_object)))
+
+	SET p_sql_check_ck += ''''
+
+
+	SET p_sql_check_ck += '
+		;THROW 50001, @msg, 1
+	END
+	'
+END;
+//
+
+DELIMITER ;
+
+
+
+
+IF object_id('dbo.usp_GenerateUQCheck') IS NOT NULL THEN
+	DROP PROCEDURE usp_GenerateUQCheck;
+END IF;
+ 
+/* SQLINES DEMO *** **
+Procedure for generating checks useful for validating and enforcing uniqueness, in the absence of unique constraints
+	to generate a point lookup check, suitable for enforcement at insert time, provide @reference_parameters
+	to generate a validation query, suitable for referential integrity checks after the fact, 
+		to validate integrity for the entire @on_object, do not provide @reference_parameters
+*********************/
+-- SQLINES LICENSE FOR EVALUATION USE ONLY
+DELIMITER //
+
+CREATE PROCEDURE usp_GenerateUQCheck (
+		p_on_object int,
+		p_on_clist dbo.ColumnList) READONLY,
+		@reference_parameters dbo.ColumnList READONLY,
+		@sql_check_uq nvarchar(max) OUTPUT
+AS
+BEGIN		
+
+	IF p_on_object IS NULL OR (SELECT COUNT(*) FROM @on_clist) = 0
+	THEN
+		;THROW 50001, N'Provide @on_object and @on_clist to validate uniqueness', 1
+	END IF;
+
+	-- SQLINES DEMO *** no reference parameters
+	IF (SELECT COUNT(*) FROM @reference_parameters) = 0
+	THEN
+		SET v_sql_check_uq = CONCAT(N'	DECLARE @uq_violation bit = 0 
+		' 
+			, N'IF (SELECT COUNT(*) FROM ' 
+			, quotename(object_schema_name(p_on_object))
+			, N'.' 
+			, quotename(object_name(p_on_object))
+			, N') > (SELECT COUNT (*) FROM (SELECT DISTINCT 1 AS [1dummycolumn1]');
+
+		-- SQLINES LICENSE FOR EVALUATION USE ONLY
+		SELECT @sql_check_uq += N', '; 
+			+ QUOTENAME(f.name) 
+		FROM p_on_clist f
+
+		SET v_sql_check_uq += CONCAT(N' FROM '
+			, quotename(object_schema_name(p_on_object))
+			, N'.' 
+			, quotename(object_name(p_on_object))
+			, N') a)
+			SET @uq_violation=1')
+
+	ELSE
+	-- SQLINES DEMO *** e reference parameters
+
+		IF (SELECT COUNT(*) FROM @reference_parameters) != (SELECT COUNT(*) FROM @on_clist)
+		THEN
+			;THROW 50001, N'Parameters @reference_parameters and @on_clist must have the same cardinality', 1
+		END IF;
+
+		SET v_sql_check_uq = CONCAT(N'	DECLARE @fk_violation bit = 0
+		' 
+			, N'SELECT @fk_violation=1 FROM ' 
+			, quotename(object_schema_name(p_on_object))
+			, N'.' 
+			, quotename(object_name(p_on_object))
+			, N' ');
+
+		SET v_sql_check_uq += N'
+		WHERE 1=1'
+
+		-- SQLINES LICENSE FOR EVALUATION USE ONLY
+		SELECT @sql_check_uq += N' AND '; + CONCAT(QUOTENAME(t.name) 
+			, N'=' 
+			, p.name) 
+		FROM p_on_clist t JOIN @reference_parameters p ON t.id=p.id
+	END IF;
+
+
+
+	SET v_sql_check_uq += CONCAT(N'
+	IF @uq_violation=1
+	BEGIN
+		'
+		, 'DECLARE @msg nvarchar(256) = N''Violation of uniqueness')
+	
+	SET v_sql_check_uq += Concat(' on table '
+		, quotename(object_schema_name(p_on_object))
+		, N'.' 
+		, quotename(object_name(p_on_object))
+		, '''')
+
+
+	SET v_sql_check_uq += '
+		;THROW 50001, @msg, 1
+	END
+	'
+END;
+
+END;
+//
+
+DELIMITER ;
+
+
+
+
+/* SQLINES DEMO *** bles with metadata about database integrity *****************/
+
+
+IF object_id('dbo.ReferentialIntegrity') IS NOT NULL THEN
+	DROP TABLE ReferentialIntegrity;
+END IF;
+ 
+-- SQLINES LICENSE FOR EVALUATION USE ONLY
+CREATE TABLE ReferentialIntegrity
+(
+	from_object nvarchar(256) not null,
+	to_object nvarchar(256) not null,
+	number smallint not null default (1),
+	from_column nvarchar(128) not null,
+	to_column nvarchar(128) not null,
+
+	index ix_ReferentialIntegrity clustered (from_object);
+)
+GO
+IF object_id('dbo.DomainIntegrity') IS NOT NULL THEN
+	DROP TABLE DomainIntegrity;
+END IF;
+ 
+-- SQLINES LICENSE FOR EVALUATION USE ONLY
+CREATE TABLE DomainIntegrity
+(
+	on_object nvarchar(256) not null,
+	expression nvarchar(1000) not null,
+	index ix_ci clustered (on_object);
+)
+GO
+
+IF object_id('dbo.UniqueIntegrity') IS NOT NULL THEN
+	DROP TABLE UniqueIntegrity;
+END IF;
+ 
+-- SQLINES LICENSE FOR EVALUATION USE ONLY
+CREATE TABLE UniqueIntegrity
+(
+	on_object nvarchar(256) not null,
+	number smallint not null,
+	column_name nvarchar(256) not null,
+	index ix_ci clustered (on_object, number) 
+);
+
+-- SQLINES DEMO *** n about integrity for the migrated tables
+INSERT UniqueIntegrity (on_object, number, column_name) VALUES 
+	('Production.Product_inmem', 1, 'Name'),
+	('Production.Product_inmem', 2, 'ProductNumber')
+
+INSERT ReferentialIntegrity (from_object, to_object, number, from_column, to_column) VALUES 
+	('Production.Product_inmem', 'Production.ProductModel', 1, 'ProductModelID', 'ProductModelID'),
+	('Production.Product_inmem', 'Production.ProductSubcategory', 1, 'ProductSubcategoryID', 'ProductSubcategoryID'),
+	('Production.Product_inmem', 'Production.UnitMeasure', 1, 'SizeUnitMeasureCode', 'UnitMeasureCode'),
+	('Production.Product_inmem', 'Production.UnitMeasure', 2, 'WeightUnitMeasureCode', 'UnitMeasureCode')
+
+INSERT DomainIntegrity (on_object, expression) VALUES
+	('Production.Product_inmem', '(upper([Class])=''H'' OR upper([Class])=''M'' OR upper([Class])=''L'' OR [Class] IS NULL)'),
+	('Production.Product_inmem', '[DaysToManufacture]>=(0)'),
+	('Production.Product_inmem', '[ListPrice]>=(0.00)'),
+	('Production.Product_inmem', '(upper([ProductLine])=''R'' OR upper([ProductLine])=''M'' OR upper([ProductLine])=''T'' OR upper([ProductLine])=''S'' OR [ProductLine] IS NULL)'),
+	('Production.Product_inmem', '[ReorderPoint]>(0)'),
+	('Production.Product_inmem', '[SafetyStockLevel]>(0)'),
+	('Production.Product_inmem', '[SellEndDate]>=[SellStartDate] OR [SellEndDate] IS NULL'),
+	('Production.Product_inmem', '[StandardCost]>=(0.00)'),
+	('Production.Product_inmem', 'upper([Style])=''U'' OR upper([Style])=''M'' OR upper([Style])=''W'' OR [Style] IS NULL'),
+	('Production.Product_inmem', '[Weight]>(0.00)')
+
+INSERT DomainIntegrity (on_object, expression) VALUES
+	('Sales.SpecialOffer_inmem', '[DiscountPct]>=(0.00)'),
+	('Sales.SpecialOffer_inmem', '[EndDate]>=[StartDate]'),
+	('Sales.SpecialOffer_inmem', '[MaxQty]>=(0)'),
+	('Sales.SpecialOffer_inmem', '[MinQty]>=(0)')
+
+INSERT ReferentialIntegrity (from_object, to_object, from_column, to_column) VALUES 
+	('Sales.SpecialOfferProduct_inmem', 'Production.Product', 'ProductID', 'ProductID'),
+	('Sales.SpecialOfferProduct_inmem', 'Sales.SpecialOffer', 'SpecialOfferID', 'SpecialOfferID')
+
+
+INSERT ReferentialIntegrity (from_object, to_object, number, from_column, to_column) VALUES 
+	('Sales.SalesOrderHeader_inmem', 'Person.Address', 1, 'BillToAddressID', 'AddressID'),
+	('Sales.SalesOrderHeader_inmem', 'Person.Address', 2, 'ShipToAddressID', 'AddressID'),
+	('Sales.SalesOrderHeader_inmem', 'Sales.CreditCard', 1, 'CreditCardID', 'CreditCardID'),
+	('Sales.SalesOrderHeader_inmem', 'Sales.CurrencyRate', 1, 'CurrencyRateID', 'CurrencyRateID'),
+	('Sales.SalesOrderHeader_inmem', 'Sales.Customer', 1, 'CustomerID', 'CustomerID'),
+	('Sales.SalesOrderHeader_inmem', 'Sales.SalesPerson', 1, 'SalesPersonID', 'BusinessEntityID'),
+	('Sales.SalesOrderHeader_inmem', 'Sales.SalesTerritory', 1, 'TerritoryID', 'TerritoryID'),
+	('Sales.SalesOrderHeader_inmem', 'Purchasing.ShipMethod', 1, 'ShipMethodID', 'ShipMethodID')
+
+INSERT DomainIntegrity (on_object, expression) VALUES
+	('Sales.SalesOrderHeader_inmem', '[DueDate]>=[OrderDate]'),
+	('Sales.SalesOrderHeader_inmem', '[Freight]>=(0.00)'),
+	('Sales.SalesOrderHeader_inmem', '[ShipDate]>=[OrderDate] OR [ShipDate] IS NULL'),
+	('Sales.SalesOrderHeader_inmem', '[Status]>=(0) AND [Status]<=(8)'),
+	('Sales.SalesOrderHeader_inmem', '[SubTotal]>=(0.00)'),
+	('Sales.SalesOrderHeader_inmem', '[TaxAmt]>=(0.00)')
+
+INSERT ReferentialIntegrity (from_object, to_object, number, from_column, to_column) VALUES 
+	('Sales.SalesOrderDetail_inmem', 'Sales.SalesOrderHeader_inmem', 1, 'SalesOrderID', 'SalesOrderID'),
+	('Sales.SalesOrderDetail_inmem', 'Sales.SpecialOfferProduct_inmem', 1, 'SpecialOfferID', 'SpecialOfferID'),
+	('Sales.SalesOrderDetail_inmem', 'Sales.SpecialOfferProduct_inmem', 1, 'ProductID', 'ProductID')
+
+INSERT DomainIntegrity (on_object, expression) VALUES
+	('Sales.SalesOrderDetail_inmem', '[OrderQty]>(0)'),
+	('Sales.SalesOrderDetail_inmem', '[UnitPrice]>=(0.00)'),
+	('Sales.SalesOrderDetail_inmem', '[UnitPriceDiscount]>=(0.00)');
+ 
+
+IF object_id('dbo.usp_ValidateIntegrity') IS NOT NULL THEN
+	DROP PROCEDURE usp_ValidateIntegrity;
+END IF;
+ 
+-- SQLINES DEMO *** referential and domain integrity for a given object, based on the contents
+-- SQLINES DEMO *** bo.ReferentialIntegrity and dbo.DomainIntegrity
+-- SQLINES LICENSE FOR EVALUATION USE ONLY
+DELIMITER //
+
+CREATE PROCEDURE usp_ValidateIntegrity ( p_object_id int /* = NULL */)
+BEGIN
+DECLARE NOT_FOUND INT DEFAULT 0;
+DECLARE CONTINUE HANDLER FOR NOT FOUND SET NOT_FOUND = 1;
+
+	IF p_object_id IS NOT NULL AND NOT EXISTS (SELECT * FROM sys.tables WHERE object_id=p_object_id)
+	THEN
+		;THROW 50001, N'Parameter @object_id must be the object_id of a table in the current database', 1
+	END IF;
+
+	DECLARE v_fk_count int DEFAULT 0;
+		DECLARE v_ck_count int DEFAULT 0;
+		DECLARE v_uq_count int DEFAULT 0;
+
+	DECLARE v_from_object nvarchar(256); 
+		DECLARE v_to_object nvarchar(256); 
+		DECLARE v_number int; 
+		DECLARE v_expression nvarchar(1000);
+		DECLARE v_prev_from_object nvarchar(256);
+	BEGIN TRY
+	
+		OPEN fk_cursor;
+
+		FETCH NEXT FROM; fk_cursor 
+		INTO v_from_object, v_to_object, v_number
+
+		/* PRINT N'Referential integrity validation:' */
+		/* PRINT N'' */
+
+		WHILE NOT_FOUND=0
+		DO
+			SET v_prev_from_object = v_from_object;
+
+			DECLARE 
+				v_to_clist dbo.ColumnList ;
+				DECLARE v_from_clist dbo.ColumnList ;
+				DECLARE v_sql_check_fk nvarchar(1000);
+				DECLARE v_reference_parameters dbo.ColumnList;
+
+			DELETE FROM @to_clist;
+			DELETE FROM @from_clist;
+
+			INSERT @from_clist 
+			SELECT from_column FROM ReferentialIntegrity
+			WHERE from_object=v_from_object AND to_object=v_to_object and number=v_number
+			ORDER BY from_column, to_column;
+
+			INSERT @to_clist 
+			SELECT to_column FROM ReferentialIntegrity
+			WHERE from_object=v_from_object AND to_object=v_to_object and number=v_number
+			ORDER BY from_column, to_column;
+
+			declare v_from_object_id int default object_id(v_from_object);
+			declare v_to_object_id int default object_id(v_to_object);
+			CALL usp_GenerateFKCheck( v_from_object_id, v_to_object_id, v_from_clist, v_to_clist, v_reference_parameters, v_sql_check_fk );
+			EXECUTE sp_executesql v_sql_check_fk
+			SET v_sql_check_fk = N'';
+
+			SET v_fk_count += 1
+
+			FETCH NEXT FROM; fk_cursor 
+			INTO v_from_object, v_to_object, v_number
+
+			IF (object_id(v_from_object)!=object_id(v_prev_from_object)) OR @@FETCH_STATUS!=0
+			THEN
+				/* PRINT Concat(v_prev_from_object
+					, N': validated '
+					, cast(v_fk_count as nvarchar(1)) 
+					, N' referential integrity rules') */
+
+				SET v_fk_count = 0;
+			END IF;
+		END WHILE;
+
+		CLOSE fk_cursor;
+
+	
+		SET NOT_FOUND = 0;
+		OPEN ck_cursor;
+
+		FETCH NEXT FROM; ck_cursor 
+		INTO v_from_object, v_expression
+
+		/* PRINT N'' */
+		/* PRINT N'' */
+		/* PRINT N'Domain integrity validation:' */
+		/* PRINT N'' */
+
+		WHILE NOT_FOUND=0
+		DO
+			SET v_prev_from_object = v_from_object;
+
+			DECLARE 
+				v_sql_check_ck longtext; 
+
+			SET v_from_object_id = object_id(v_from_object);
+			CALL usp_GenerateCKCheck( v_expression, v_from_object_id, v_sql_check_ck );
+			EXECUTE sp_executesql v_sql_check_ck
+			SET v_sql_check_fk = N'';
+
+			SET v_ck_count += 1
+
+			FETCH NEXT FROM; ck_cursor 
+			INTO v_from_object, v_expression 
+
+			IF (object_id(v_from_object)!=object_id(v_prev_from_object)) OR @@FETCH_STATUS!=0
+			THEN
+				/* PRINT Concat(v_prev_from_object
+					, N': validated '
+					, cast(v_ck_count as nvarchar(1)) 
+					, N' domain integrity rules') */
+
+				SET v_ck_count = 0;
+			END IF;
+		END WHILE;
+
+		CLOSE ck_cursor;
+
+
+	
+		SET NOT_FOUND = 0;
+		OPEN uq_cursor;
+
+		FETCH NEXT FROM; uq_cursor 
+		INTO v_from_object, v_number
+
+		/* PRINT N'' */
+		/* PRINT N'' */
+		/* PRINT N'Uniqueness validation:' */
+		/* PRINT N'' */
+
+		WHILE NOT_FOUND=0
+		DO
+			SET v_prev_from_object = v_from_object;
+
+			DECLARE 
+				v_sql_check_uq nvarchar(1000);
+
+			DELETE FROM @reference_parameters;
+			DELETE FROM @from_clist;
+
+			INSERT @from_clist 
+			SELECT column_name FROM UniqueIntegrity
+			WHERE on_object=v_from_object AND number=v_number
+			ORDER BY column_name;
+
+			SET v_from_object_id = object_id(v_from_object);
+			CALL usp_GenerateUQCheck( v_from_object_id, v_from_clist, v_reference_parameters, v_sql_check_uq );
+			EXECUTE sp_executesql v_sql_check_uq
+			SET v_sql_check_uq = N'';
+
+			SET v_uq_count += 1
+
+			FETCH NEXT FROM; uq_cursor 
+			INTO v_from_object, v_number
+
+			IF (object_id(v_from_object)!=object_id(v_prev_from_object)) OR @@FETCH_STATUS!=0
+			THEN
+				/* PRINT Concat(v_prev_from_object
+					, N': validated '
+					, cast(v_uq_count as nvarchar(1)) 
+					, N' uniqueness rules') */
+
+				SET v_uq_count = 0;
+			END IF;
+		END WHILE;
+
+		CLOSE uq_cursor;
+
+		
+
+	END; TRY
+	BEGIN CATCH
+		IF CURSOR_STATUS('local', 'fk_cursor') >= 0
+		THEN
+			CLOSE fk_cursor;
+		END IF;
+		IF CURSOR_STATUS('local', 'ck_cursor') >= 0
+		THEN
+			CLOSE ck_cursor;
+		END IF;
+		IF CURSOR_STATUS('local', 'uq_cursor') >= 0
+		THEN
+			CLOSE uq_cursor;
+		END IF;
+		/* PRINT N'T-SQL executed before the error condition:' */
+		/* PRINT v_sql_check_fk */
+		/* PRINT v_sql_check_ck */
+		/* PRINT v_sql_check_uq
+		; */THROW
+	END; CATCH
+END;
+//
+
+DELIMITER ;
+
+
+
+
+/* SQLINES DEMO *** *********** demonstrate integrity enforcement ******************************/
+
+IF object_id('Sales.usp_InsertSpecialOfferProduct_inmem') IS NOT NULL THEN
+	DROP PROCEDURE Sales.usp_InsertSpecialOfferProduct_inmem;
+END IF;
+ 
+-- SQLINES DEMO *** ial integrity on insert of records in the table Sales.SpecialOfferProduct_inmem
+-- SQLINES LICENSE FOR EVALUATION USE ONLY
+DELIMITER //
+
+CREATE PROCEDURE Sales.usp_InsertSpecialOfferProduct_inmem ( p_SpecialOfferID int) NOT NULL, @ProductID int NOT NULL
+WITH NATIVE_COMPILATION, SCHEMABINDING, CALL AS OWNER;
+AS
+-- SQLINES DEMO *** READ isolation: the referenced specialoffer and product must exist at the time of the
+-- SQLINES DEMO *** s at the end of the transaction
+BEGIN ATOMIC 
+WITH (TRANSACTION ISOLATION LEVEL=REPEATABLE READ, LANGUAGE=N'us_english')
+
+	DECLARE v_exists tinyint; NOT NULL = 0
+
+	-- SQLINES DEMO *** l integrity for SpecialOfferID
+	-- SQLINES LICENSE FOR EVALUATION USE ONLY
+	SELECT 1 INTO v_exists FROM Sales.SpecialOffer_inmem WHERE SpecialOfferID = p_SpecialOfferID;
+	IF v_exists=0
+	THEN
+		DECLARE v_msg nvarchar(256) DEFAULT CONCAT(N'Referential integrity with Sales.SpecialOffer_inmem is violated for SpecialOfferID ' , cast(p_SpecialOfferID as nvarchar(1)))
+		;THROW 50001, v_msg, 1
+	END IF;
+	
+	SET v_exists=0;
+
+	-- SQLINES DEMO *** l integrity for ProductID
+	-- SQLINES LICENSE FOR EVALUATION USE ONLY
+	SELECT 1 INTO v_exists FROM Production.Product_inmem WHERE ProductID = @ProductID;
+	IF v_exists=0
+	THEN
+		DECLARE v_msg2 nvarchar(256) DEFAULT CONCAT(N'Referential integrity with Production.Product_inmem is violated for ProductID ' , cast(@ProductID as nvarchar(1)))
+		;THROW 50001, v_msg2, 1
+	END IF;
+
+	INSERT Sales.SpecialOfferProduct_inmem (SpecialOfferID, ProductID) VALUES (p_SpecialOfferID, @ProductID);
+END;
+
+END;
+//
+
+DELIMITER ;
+
+
+
+IF object_id('Sales.usp_InsertSpecialOffer_inmem') IS NOT NULL THEN
+	DROP PROCEDURE Sales.usp_InsertSpecialOffer_inmem;
+END IF;
+ 
+-- SQLINES DEMO *** ntegrity on insert of records in the table Sales.SpecialOffer_inmem
+-- SQLINES LICENSE FOR EVALUATION USE ONLY
+DELIMITER //
+
+CREATE PROCEDURE Sales.usp_InsertSpecialOffer_inmem ( 
+	p_Description nvarchar(255)) NOT NULL, 
+	@DiscountPct smallmoney NOT NULL = 0,
+	@Type nvarchar(50) NOT NULL,
+	@Category nvarchar(50) NOT NULL,
+	@StartDate datetime2 NOT NULL,
+	@EndDate datetime2 NOT NULL,
+	@MinQty int NOT NULL = 0,
+	@MaxQty int = NULL,
+	@SpecialOfferID int OUTPUT
+WITH NATIVE_COMPILATION, SCHEMABINDING, CALL AS OWNER;
+AS
+BEGIN ATOMIC 
+WITH (TRANSACTION ISOLATION LEVEL=SNAPSHOT, LANGUAGE=N'us_english')
+	DECLARE v_msg nvarchar(256);
+
+	-- SQLINES DEMO *** egrity
+	-- SQLINES DEMO *** fer_inmem', '[DiscountPct]>=(0.00)'),
+	IF NOT @DiscountPct >= 0
+	THEN
+		SET v_msg = N'Domain integrity violation: @DiscountPct is negative'
+		;THROW 50001, v_msg, 1
+	END IF;
+	-- SQLINES DEMO *** fer_inmem', '[EndDate]>=[StartDate]'),
+	IF NOT @EndDate>=@StartDate
+	THEN
+		SET v_msg = N'Domain integrity violation: @EndDate<@StartDate'
+		;THROW 50001, v_msg, 1
+	END IF;
+	--  SQLINES DEMO *** er_inmem', '[MaxQty]>=(0)'),
+	IF NOT @MaxQty>=(0)
+	THEN
+		SET v_msg = N'Domain integrity violation: @MaxQty<0'
+		;THROW 50001, v_msg, 1
+	END IF;
+	-- SQLINES DEMO *** fer_inmem', '[MinQty]>=(0)')	
+	IF NOT @MinQty>=(0)
+	THEN
+		SET v_msg = N'Domain integrity violation: @MinQty<0'
+		;THROW 50001, v_msg, 1
+	END IF;
+	
+
+	INSERT Sales.SpecialOffer_inmem (Description, 
+		DiscountPct,
+		Type,
+		Category,
+		StartDate,
+		EndDate,
+		MinQty,
+		MaxQty) 
+	VALUES (p_Description, 
+		@DiscountPct,
+		@Type,
+		@Category,
+		@StartDate,
+		@EndDate,
+		@MinQty,
+		@MaxQty);
+
+	SET v_SpecialOfferID = LAST_INSERT_ID();
+END;
+
+END;
+//
+
+DELIMITER ;
+
+
+
+
+IF object_id('Sales.usp_DeleteSpecialOffer_inmem') IS NOT NULL THEN
+	DROP PROCEDURE Sales.usp_DeleteSpecialOffer_inmem;
+END IF;
+ 
+-- SQLINES DEMO *** ial integrity on delete of records in the table Sales.SpecialOffer_inmem
+-- SQLINES LICENSE FOR EVALUATION USE ONLY
+DELIMITER //
+
+CREATE PROCEDURE Sales.usp_DeleteSpecialOffer_inmem ( 
+	p_SpecialOfferID int) NOT NULL
+WITH NATIVE_COMPILATION, SCHEMABINDING, CALL AS OWNER;
+AS
+-- SQLINES DEMO *** E isolation: cannot allow insert of new rows in specialoffer product between the integrity check
+-- SQLINES DEMO *** the transaction
+BEGIN ATOMIC 
+WITH (TRANSACTION ISOLATION LEVEL=SERIALIZABLE, LANGUAGE=N'us_english')
+	DECLARE v_exists tinyint; NOT NULL = 0
+
+	-- SQLINES DEMO *** l integrity for SpecialOfferID
+	-- SQLINES LICENSE FOR EVALUATION USE ONLY
+	SELECT 1 INTO v_exists FROM Sales.SpecialOfferProduct_inmem WHERE SpecialOfferID = p_SpecialOfferID;
+	IF v_exists=1
+	THEN
+		DECLARE v_msg nvarchar(256) DEFAULT CONCAT(N'Referential integrity with Sales.SpecialOfferProduct_inmem is violated for SpecialOfferID ' , cast(p_SpecialOfferID as nvarchar(1)))
+		;THROW 50001, v_msg, 1
+	END IF;
+
+	DELETE FROM Sales.SpecialOffer_inmem WHERE SpecialOfferID=p_SpecialOfferID;
+
+	IF Found_rows() < 1
+	THEN
+		DECLARE v_msg2 nvarchar(256) DEFAULT CONCAT(N'Record not found for SpecialOfferID ' , cast(p_SpecialOfferID as nvarchar(1)))
+		;THROW 50001, v_msg2, 1
+	END IF;
+END;
+
+END;
+//
+
+DELIMITER ;
+
+
+
+
+IF object_id('Production.usp_InsertProduct_inmem') IS NOT NULL THEN
+	DROP PROCEDURE Production.usp_InsertProduct_inmem;
+END IF;
+ 
+-- SQLINES DEMO *** ntegrity and uniqueness on insert of records in the table Production.Product_inmem
+-- SQLINES LICENSE FOR EVALUATION USE ONLY
+DELIMITER //
+
+CREATE PROCEDURE Production.usp_InsertProduct_inmem ( 
+	p_Name nvarchar(50)) NOT NULL,
+	@ProductNumber [nvarchar](25) NOT NULL,
+	@MakeFlag `bit` NOT NULL = 1,
+	@FinishedGoodsFlag `bit` NOT NULL = 1,
+	@Color [nvarchar](15) = NULL,
+	@SafetyStockLevel `smallint` NOT NULL,
+	@ReorderPoint `smallint` NOT NULL,
+	@StandardCost `money` NOT NULL,
+	@ListPrice `money` NOT NULL,
+	@Size [nvarchar](5) = NULL,
+	@SizeUnitMeasureCode [nchar](3) = NULL,
+	@WeightUnitMeasureCode [nchar](3) = NULL,
+	@Weight [decimal](8, 2) = NULL,
+	@DaysToManufacture `int` NOT NULL,
+	@ProductLine [nchar](2) = NULL,
+	@Class [nchar](2) = NULL,
+	@Style [nchar](2) = NULL,
+	@ProductSubcategoryID `int` = NULL,
+	@ProductModelID `int` = NULL,
+	@SellStartDate [datetime2](7) NOT NULL,
+	@SellEndDate [datetime2](7) = NULL,
+	@DiscontinuedDate [datetime2](7) = NULL,
+	@ProductID int OUTPUT
+WITH NATIVE_COMPILATION, SCHEMABINDING, CALL AS OWNER;
+AS
+-- SQLINES DEMO *** E isolation for the uniqueness checks: cannot allow insert of rows violating uniqueness between
+-- SQLINES DEMO *** check and the end of the transaction
+BEGIN ATOMIC 
+WITH (TRANSACTION ISOLATION LEVEL=SERIALIZABLE, LANGUAGE=N'us_english')
+	DECLARE v_msg nvarchar(256);
+
+	-- SQLINES DEMO *** egrity
+	-- SQLINES DEMO *** H' OR upper([Class])='M' OR upper([Class])='L' OR [Class] IS NULL)
+	IF NOT (@Class THEN COLLATE
+	END IF; Latin1_General_100_BIN2 = 'H' 
+			OR @Class COLLATE Latin1_General_100_BIN2 = 'M'
+			OR @Class COLLATE Latin1_General_100_BIN2 = 'L'
+			OR @Class COLLATE Latin1_General_100_BIN2 IS NULL)
+	BEGIN
+		SET v_msg = N'Domain integrity violation: @Class must be H, M, L, or NULL'
+		;THROW 50001, v_msg, 1
+	END;
+	-- SQLINES DEMO *** e]>=(0)
+	IF NOT @DaysToManufacture>=(0)
+	THEN
+		SET v_msg = N'Domain integrity violation: [DaysToManufacture]<(0)'
+		;THROW 50001, v_msg, 1
+	END IF;
+	-- [ListPrice]>=(0.00)
+	IF NOT @ListPrice>=(0.00)
+	THEN
+		SET v_msg = N'Domain integrity violation: [ListPrice]<(0.00)'
+		;THROW 50001, v_msg, 1
+	END IF;
+	-- SQLINES DEMO *** 'R' OR ([ProductLine])='M' OR ([ProductLine])='T' OR ([ProductLine])='S' OR [ProductLine] IS NULL)	
+	IF NOT ((@ProductLine) THEN COLLATE
+	END IF; Latin1_General_100_BIN2 = 'R'
+			OR (@ProductLine) COLLATE Latin1_General_100_BIN2 = 'M'
+			OR (@ProductLine) COLLATE Latin1_General_100_BIN2 = 'T'
+			OR (@ProductLine) COLLATE Latin1_General_100_BIN2 = 'S'
+			OR @ProductLine COLLATE Latin1_General_100_BIN2 IS NULL)
+	BEGIN
+		SET v_msg = N'Domain integrity violation: ProductLine must be R, M, T, S, or NULL'
+		;THROW 50001, v_msg, 1
+	END;
+	-- [ReorderPoint]>(0)
+	IF NOT @ReorderPoint>(0)
+	THEN
+		SET v_msg = N'Domain integrity violation: [ReorderPoint]<=(0)'
+		;THROW 50001, v_msg, 1
+	END IF;
+	--  SQLINES DEMO *** >(0)
+	IF NOT @SafetyStockLevel>(0)
+	THEN
+		SET v_msg = N'Domain integrity violation: [SafetyStockLevel]<=(0)'
+		;THROW 50001, v_msg, 1
+	END IF;	
+	--  SQLINES DEMO *** llStartDate] OR [SellEndDate] IS NULL
+	IF NOT (@SellEndDate>=@SellStartDate OR @SellEndDate IS NULL)
+	THEN
+		SET v_msg = N'Domain integrity violation: [SellEndDate]<[SellStartDate] AND [SellEndDate] IS NOT NULL'
+		;THROW 50001, v_msg, 1
+	END IF;	
+	--  SQLINES DEMO *** .00)
+	IF NOT @StandardCost>=(0.00)
+	THEN
+		SET v_msg = N'Domain integrity violation: [StandardCost]<(0.00)'
+		;THROW 50001, v_msg, 1
+	END IF;	
+	-- [Weight]>(0.00)
+	IF NOT @Weight>(0.00)
+	THEN
+		SET v_msg = N'Domain integrity violation: [Weight]<=(0)'
+		;THROW 50001, v_msg, 1
+	END IF;	
+	--  SQLINES DEMO ***  OR upper([Style])='M' OR upper([Style])='W' OR [Style] IS NULL
+	IF NOT ((@Style) THEN COLLATE
+	END IF; Latin1_General_100_BIN2 = 'U' 
+			OR (@Style) COLLATE Latin1_General_100_BIN2 = 'M' 
+			OR (@Style) COLLATE Latin1_General_100_BIN2 = 'W' 
+			OR @Style COLLATE Latin1_General_100_BIN2 IS NULL)
+	BEGIN
+		SET v_msg = N'Domain integrity violation: Style must be U, M, W or NULL'
+		;THROW 50001, v_msg, 1
+	END;
+	-- SQLINES DEMO ***  of Name
+	DECLARE v_exists tinyint; NOT NULL = 0
+	-- SQLINES LICENSE FOR EVALUATION USE ONLY
+	SELECT 1 INTO v_exists FROM Production.Product_inmem WHERE Name=p_Name; COLLATE Latin1_General_100_BIN2
+	IF v_exists=1
+	THEN
+		SET v_msg = CONCAT(N'Uniqueness violation for @Name ' , p_Name)
+		;THROW 50001, v_msg, 1
+	END IF;
+
+	-- SQLINES DEMO ***  of ProductNumber
+	SET v_exists = 0;
+	-- SQLINES LICENSE FOR EVALUATION USE ONLY
+	SELECT 1 INTO v_exists FROM Production.Product_inmem WHERE ProductNumber=@ProductNumber; COLLATE Latin1_General_100_BIN2
+	IF v_exists=1
+	THEN
+		SET v_msg = CONCAT(N'Uniqueness violation for @ProductNumber ' , @ProductNumber)
+		;THROW 50001, v_msg, 1
+	END IF;
+
+	INSERT Production.Product_inmem (
+		Name ,
+		ProductNumber,
+		MakeFlag ,
+		FinishedGoodsFlag,
+		Color ,
+		SafetyStockLevel ,
+		ReorderPoint ,
+		StandardCost ,
+		ListPrice ,
+		Size ,
+		SizeUnitMeasureCode ,
+		WeightUnitMeasureCode ,
+		Weight ,
+		DaysToManufacture ,
+		ProductLine ,
+		Class ,
+		Style ,
+		ProductSubcategoryID ,
+		ProductModelID ,
+		SellStartDate ,
+		SellEndDate ,
+		DiscontinuedDate ) 
+	VALUES (
+		p_Name ,
+		@ProductNumber,
+		@MakeFlag ,
+		@FinishedGoodsFlag,
+		@Color ,
+		@SafetyStockLevel ,
+		@ReorderPoint ,
+		@StandardCost ,
+		@ListPrice ,
+		@Size ,
+		@SizeUnitMeasureCode ,
+		@WeightUnitMeasureCode ,
+		@Weight ,
+		@DaysToManufacture ,
+		@ProductLine ,
+		@Class ,
+		@Style ,
+		@ProductSubcategoryID ,
+		@ProductModelID ,
+		@SellStartDate ,
+		@SellEndDate ,
+		@DiscontinuedDate ); 
+
+	SET v_ProductID = LAST_INSERT_ID();
+END;
+
+END;
+//
+
+DELIMITER ;
+
+
+
+
+IF object_id('Production.usp_DeleteProduct_inmem') IS NOT NULL THEN
+	DROP PROCEDURE Production.usp_DeleteProduct_inmem;
+END IF;
+ 
+-- SQLINES DEMO *** ial integrity on delete of records in the table Sales.SpecialOffer_inmem
+-- SQLINES LICENSE FOR EVALUATION USE ONLY
+DELIMITER //
+
+CREATE PROCEDURE Production.usp_DeleteProduct_inmem (
+	p_ProductID int) NOT NULL
+WITH NATIVE_COMPILATION, SCHEMABINDING, CALL AS OWNER;
+AS
+-- SQLINES DEMO *** E isolation: cannot allow insert of new rows in specialofferproduct between the integrity check
+-- SQLINES DEMO *** the transaction
+BEGIN ATOMIC 
+WITH (TRANSACTION ISOLATION LEVEL=SERIALIZABLE, LANGUAGE=N'us_english')
+	DECLARE v_exists tinyint; NOT NULL = 0
+
+	-- SQLINES DEMO *** l integrity for ProductID
+	-- SQLINES LICENSE FOR EVALUATION USE ONLY
+	SELECT 1 INTO v_exists FROM Sales.SpecialOfferProduct_inmem WHERE ProductID = p_ProductID;
+	IF v_exists=1
+	THEN
+		DECLARE v_msg nvarchar(256) DEFAULT CONCAT(N'Referential integrity with Sales.SpecialOfferProduct_inmem is violated for ProductID ' , cast(p_ProductID as nvarchar(1)))
+		;THROW 50001, v_msg, 1
+	END IF;
+
+	DELETE FROM Production.Product_inmem WHERE ProductID=p_ProductID;
+
+	IF Found_rows() < 1
+	THEN
+		DECLARE v_msg2 nvarchar(256) DEFAULT CONCAT(N'Record not found for ProductID ' , cast(p_ProductID as nvarchar(1)))
+		;THROW 50001, v_msg2, 1
+	END IF;
+END;
+
+END;
+//
+
+DELIMITER ;
+
+
+
+
+-- SQLINES DEMO ***  validation for migrated data:
+CALL usp_ValidateIntegrity;
+ 
+
+
