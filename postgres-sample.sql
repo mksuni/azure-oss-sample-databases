@@ -1,7 +1,7 @@
-/* SQLINES DEMO *** ****************************************************
-http://www.mysqltutorial.org
+/**** ****************************************************
+MySQL database sample from http://www.mysqltutorial.org converted to PostgreSQL
 *********************************************************************
-Name: MySQL Sample Database classicmodels
+Name:  Sample Database classicmodels
 Link: http://www.mysqltutorial.org/mysql-sample-database.aspx
 Version 3.1
 + changed data type from DOUBLE to DECIMAL for amount columns
@@ -13,24 +13,13 @@ Version 2.0
 *********************************************************************
 */
 
+CREATE DATABASE `classicmodels`;
 
-/* SQLINES DEMO *** tf8 */;
+USE 'classicmodels';
 
-/* SQLINES DEMO *** E=''*/;
-
-/* SQLINES DEMO *** IQUE_CHECKS=@@UNIQUE_CHECKS, UNIQUE_CHECKS=0 */;
-/* SQLINES DEMO *** REIGN_KEY_CHECKS=@@FOREIGN_KEY_CHECKS, FOREIGN_KEY_CHECKS=0 */;
-/* SQLINES DEMO *** L_MODE=@@SQL_MODE, SQL_MODE='NO_AUTO_VALUE_ON_ZERO' */;
-/* SQLINES DEMO *** L_NOTES=@@SQL_NOTES, SQL_NOTES=0 */;
-CREATE DATABASE /* SQLINES DEMO *** TS*/classicmodels /* SQLINES DEMO *** RACTER SET latin1 */;
-
-SET SCHEMA 'classicmodels';
-
-/* SQLINES DEMO *** r table `customers` */
 
 DROP TABLE IF EXISTS customers;
 
--- SQLINES LICENSE FOR EVALUATION USE ONLY
 CREATE TABLE customers (
   customerNumber int NOT NULL,
   customerName varchar(50) NOT NULL,
