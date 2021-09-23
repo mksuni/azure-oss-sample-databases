@@ -1,11 +1,14 @@
 # Polls database Schema
 
-## Tables
+With this schema you can now start building an application in any languages of your choice to create a simple polls applications.
+
+## Tables in this schema
 
 ### User Table
 In this section, we will design the User Table to store user information of the poll/survey owner. The same table can be used to relate the poll/survey owners so that the users can manage their own poll or survey and to track the voting activities. Below mentioned is the description of all the columns of the User Table.
 
 |Column name| Description|
+| ----------- | ----------- |
 |Id|The unique id to identify the user.|
 |First Name|The first name of the user.|
 |Last Name	The last name of the user.
@@ -21,6 +24,7 @@ In this section, we will design the User Table to store user information of the 
 In this section, we will design the Poll Table to store the poll and survey data. Below mentioned is the description of all the columns of the Poll Table.
 
 |Column name| Description|
+| ----------- | ----------- |
 |Id|	The unique id to identify the poll/survey.|
 |Host Id|	The host id to identify the poll/survey host.|
 |Title|	The poll/survey title to be displayed on the Poll/Survey Page and the lists.|
@@ -40,6 +44,7 @@ In this section, we will design the Poll Table to store the poll and survey data
 The Poll Metadata  Table can be used to store additional information of a poll or survey including the poll banner URL etc. Below mentioned is the description of all the columns of the Poll Meta Table.
 
 |Column name| Description|
+| ----------- | ----------- |
 |Id	The unique id to identify the poll meta.|
 |PollId|	The poll id to identify the parent poll/survey. |
 |Key|	The key identifying the meta. |
@@ -49,6 +54,7 @@ The Poll Metadata  Table can be used to store additional information of a poll o
 The Poll Question Table can be used to store the questions related to polls and surveys. The ideal scenario is to have one question for polls and multiple questions for surveys. Below mentioned is the description of all the columns of the Poll Question Table.
 
 |Column name| Description|
+| ----------- | ----------- |
 |Id| The unique id to identify the poll question.|
 |PollId|	The poll id to identify the parent poll/survey. |
 |Type|	The type of question. The type can be a single choice(Yes/No), multiple-choice, select, or input. |
@@ -62,6 +68,7 @@ The Poll Question Table can be used to store the questions related to polls and 
 The Poll Answer Table can be used to store the answers of single-choice, multiple-choice and select type questions. In case of single-choice question, the answers can be Yes and No. Below mentioned is the description of all the columns of the Poll Answer Table.
 
 |Column name| Description|
+| ----------- | ----------- |
 |Id|	The unique id to identify the poll answer.|
 |PollId|	The poll id to identify the parent poll/survey.|
 |QuestionId|	The question id to identify the parent question.|
@@ -75,6 +82,7 @@ The Poll Answer Table can be used to store the answers of single-choice, multipl
 The Poll Vote Table can be used to store the user choices and inputs. Below mentioned is the description of all the columns of the Poll Vote Table.
 
 |Column name | Description|
+| ----------- | ----------- |
 |Id	| The unique id to identify the poll vote. |
 |PollId |	The poll id to identify the poll/survey.|
 |QuestionId	| The question id to identify the question.|
@@ -83,6 +91,7 @@ The Poll Vote Table can be used to store the user choices and inputs. Below ment
 |CreatedAt |	It stores the date and time at which the answer is created.|
 |UpdatedAt | It stores the date and time at which the answer is updated.|
 |Content |	The column used to store the user input.|
+
 
 
 
