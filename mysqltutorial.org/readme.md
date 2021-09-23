@@ -11,3 +11,8 @@ The MySQL sample database schema consists of the following tables:
 - Payments: stores payments made by customers based on their accounts.
 - Employees: stores all employee information as well as the organization structure such as who reports to whom.
 - Offices: stores sales office data.
+
+
+## Schema ER diagram
+
+![classic model ER diagram](./MySQL-Sample-Database-Schema.png)
