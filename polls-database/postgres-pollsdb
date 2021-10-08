@@ -1,9 +1,9 @@
 CREATE DATABASE  poll ;
 
-CREATE SEQUENCE user_seq;
+CREATE SEQUENCE users_seq;
 
-CREATE TABLE user (
-  id BIGINT NOT NULL DEFAULT NEXTVAL ('user_seq'),
+CREATE TABLE users (
+  id BIGINT NOT NULL DEFAULT NEXTVAL ('users_seq'),
   firstName VARCHAR(50) NULL DEFAULT NULL,
   lastName VARCHAR(50) NULL DEFAULT NULL,
   email VARCHAR(50) NULL,
@@ -34,7 +34,7 @@ CREATE TABLE poll (
   PRIMARY KEY (id),
   CONSTRAINT fk_poll_host
     FOREIGN KEY (surveyHostId)
-    REFERENCES user (id)
+    REFERENCES users (id)
     ON DELETE NO ACTION
     ON UPDATE NO ACTION);
 
@@ -87,21 +87,23 @@ CREATE TABLE poll_answer (
   createdAt TIMESTAMP(0) NOT NULL,
   updatedAt TIMESTAMP(0) NULL DEFAULT NULL,
   content TEXT NULL DEFAULT NULL,
-  PRIMARY KEY (id)
- ,
+  PRIMARY KEY (id) ,
   CONSTRAINT fk_answer_poll
     FOREIGN KEY (pollId)
     REFERENCES poll (id)
     ON DELETE NO ACTION
-    ON UPDATE NO ACTION);
-
-CREATE INDEX idx_answer_poll ON poll_answer (pollId ASC);
-
-ALTER TABLE poll_answer 
-ADD CREATE INDEX idx_answer_question ON poll_answer (questionId ASC);
-ALTER TABLE poll_answer 
-ADD CONSTRAINT fk_answer_question
+    ON UPDATE NO ACTION,
+    CONSTRAINT fk_answer_question
   FOREIGN KEY (questionId)
   REFERENCES poll_question (id)
   ON DELETE NO ACTION
-  ON UPDATE NO ACTION;
+  ON UPDATE NO ACTION,
+  CONSTRAINT fk_answer_question
+  FOREIGN KEY (questionId)
+  REFERENCES poll_question (id)
+  ON DELETE NO ACTION
+  ON UPDATE NO ACTION);
+
+CREATE INDEX idx_answer_poll ON poll_answer (pollId ASC);
+CREATE INDEX idx_answer_question ON poll_answer (questionId ASC);
+
