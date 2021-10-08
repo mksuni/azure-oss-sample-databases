@@ -5,7 +5,7 @@ Name: Converted Sample Database classicmodels from http://www.mysqltutorial.org 
 MySQL sample database Link: http://www.mysqltutorial.org/mysql-sample-database.aspx
 *********************************************************************
 */
-CREATE DATABASE 'classicmodels' ;
+CREATE DATABASE classicmodels ;
 
 SET SCHEMA 'classicmodels';
 
@@ -23,8 +23,7 @@ CREATE TABLE customers (
   country varchar(50) NOT NULL,
   salesRepEmployeeNumber int DEFAULT NULL,
   creditLimit decimal(10,2) DEFAULT NULL,
-  PRIMARY KEY (customerNumber)
- ,
+  PRIMARY KEY (customerNumber)  ,
   CONSTRAINT customers_ibfk_1 FOREIGN KEY (salesRepEmployeeNumber) REFERENCES employees (employeeNumber)
 ) ;
 
@@ -277,8 +276,6 @@ insert  into customers(customerNumber,customerName,contactLastName,contactFirstN
 (495,'Diecast Collectables','Franco','Valarie','6175552555','6251 Ingle Ln.',NULL,'Boston','MA','51003','USA',1188,'85100.00'),
 
 (496,'Kelly's Gift Shop','Snowden','Tony','+64 9 5555500','Arenales 1938 3'A'',NULL,'Auckland  ',NULL,NULL,'New Zealand',1612,'110000.00');
-
-/* SQLINES DEMO *** r table `employees` */
 
 CREATE TABLE employees (
   employeeNumber int NOT NULL,
